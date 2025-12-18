@@ -1,0 +1,11 @@
+{
+    "IDAMetadataDescriptorVersion": 1,
+    "plugin": {
+        "name":        "CrystalRE",
+        "entryPoint":  "crystalre.py",
+        "categories":  [ "" ],
+        "idaVersions": ">=9.0",
+        "description": "Make reversing crystal binaries less annoying.",
+        "version":     "0.0.1"
+    }
+}
