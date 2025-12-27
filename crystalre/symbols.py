@@ -3,6 +3,9 @@
 import sys
 import io
 from dataclasses import dataclass
+from functools import wraps
+from enum import Enum, auto
+
 from elftools.elf.elffile import * # pip install pyelftools
 import regex # pip install regex
 
@@ -79,17 +82,17 @@ def mangled_name(program, self_type)
 end
 """
 
-def split_true_commas(string: str):
+def split_true_X(string: str, sep: str):
     paren_depth, cur_idx = 0, 0
     
     cur_part = ""
     parts = []
     
     while cur_idx < len(string):
-        if paren_depth == 0 and string[cur_idx:cur_idx+2] == ", ":
+        if paren_depth == 0 and string[cur_idx:cur_idx+len(sep)] == sep:
             parts.append(cur_part)
             cur_part = ""
-            cur_idx += 2
+            cur_idx += len(sep)
             continue
         
         c = string[cur_idx]
@@ -105,7 +108,12 @@ def split_true_commas(string: str):
         parts.append(cur_part)
     
     return parts
-            
+
+def split_true_commas(string: str):
+    return split_true_X(string, ", ")
+
+def split_true_colons(string: str):
+    return split_true_X(string, "::")
 
 def parse_function(symbol_string):
     pattern = r"""
@@ -178,8 +186,8 @@ def parse_function(symbol_string):
             else:
                 result["self_type"] = self_type.rstrip(":#")
             
-            if result["args"]:
-                result["args"] = split_true_commas(result["args"]) 
+        if result["args"]:
+            result["args"] = split_true_commas(result["args"]) 
         
         return result
 
@@ -201,8 +209,7 @@ def parse_proc(symbol_string: str):
         symbol_string = symbol_string[1:]
     
     return symbol_string, proc_num
-        
-    
+
 
 def parse_data(data: io.BytesIO):
     elf_file = ELFFile(data)
@@ -219,38 +226,176 @@ def parse_data(data: io.BytesIO):
     
     return syms
 
+############################################################################
+############################################################################
+
+# decorator to enforce cache initialization
+def requires_cache(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not SymbolCache.is_initialized():
+            raise RuntimeError(f"Symbol cache not initialized. Call SymbolCache.init_cache() first before using {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
+
+class SymbolType(Enum):
+    FUNCTION = auto()
+    PROC = auto()
+    OTHER = auto()
+
+@dataclass(slots=True, frozen=True)
+class ParsedSymbol:
+    rva: int
+    symbol_type: SymbolType
+    symbol_data: dict
+    orig_name: str
+
+class SymbolCache:
+    # class variables for symbol cache
+    _symbols: dict[int, ParsedSymbol] | None = None
+    _binary_path: str | None = None
+    _initialized: bool = False
+
+    @classmethod
+    def init_cache(cls, binary_path: str) -> None:
+        # parse and cache all symbols from binary
+        data, file_type = determine_file(binary_path)
+
+        if file_type == 2:
+            raise Exception("Windows binaries are not yet supported. Symbol information is only in .pdb files.")
+
+        raw_symbols = parse_data(data)
+        cls._symbols = {}
+
+        # parse each symbol and cache parsed results
+        for sym in raw_symbols:
+            # only process function symbols
+            if sym.type != 'STT_FUNC':
+                continue
+
+            parsed_symbol = None
+
+            # crystal functions start with *
+            if sym.name.startswith("*"):
+                parsed = parse_function(sym.name)
+                if parsed is None:
+                    continue
+
+                func_info = {k: v for k, v in parsed.items() if v}
+                parsed_symbol = ParsedSymbol(
+                    rva=sym.rva,
+                    symbol_type=SymbolType.FUNCTION,
+                    symbol_data=func_info,
+                    orig_name=sym.name
+                )
+
+            # anonymous procs start with ~proc
+            elif sym.name.startswith("~proc"):
+                try:
+                    symbol_string, proc_num = parse_proc(sym.name)
+                    assert symbol_string.startswith("Proc(")
+                    assert symbol_string.endswith(")")
+                except (AssertionError, IndexError):
+                    print(f"[!] Unable to parse symbol name for proc {sym.name!r}")
+                    continue
+                
+                proc_args = split_true_commas(symbol_string[5:-1]) # Remove the Proc( and )
+                proc_info = {
+                    'symbol_string': symbol_string,
+                    'proc_num': proc_num,
+                    'args': proc_args[:-1],
+                    'return_type': proc_args[-1]
+                }
+
+                parsed_symbol = ParsedSymbol(
+                    rva=sym.rva,
+                    symbol_type=SymbolType.PROC,
+                    symbol_data=proc_info,
+                    orig_name=sym.name
+                )
+            else:
+                # TODO: Maybe other types of symbols if it ever matters in the future
+                ...
+
+            # store parsed symbol if we successfully parsed it
+            if parsed_symbol:
+                cls._symbols[sym.rva] = parsed_symbol
+
+        cls._binary_path = binary_path
+        cls._initialized = True
+
+    @classmethod
+    def reset_cache(cls, binary_path: str | None = None) -> None:
+        # reset and reparse the cache
+        if binary_path is None:
+            if cls._binary_path is None:
+                raise RuntimeError("No binary path available. Provide a path to reset_cache().")
+            binary_path = cls._binary_path
+
+        # clear cache
+        cls._symbols = None
+        cls._binary_path = None
+        cls._initialized = False
+
+        # reinitialize with new/same path
+        cls.init_cache(binary_path)
+
+    @classmethod
+    def is_initialized(cls) -> bool:
+        return cls._initialized
+
+    @classmethod
+    @requires_cache
+    def get_symbols(cls) -> dict[int, ParsedSymbol]:
+        return cls._symbols
+
+    @classmethod
+    @requires_cache
+    def get_binary_path(cls) -> str:
+        return cls._binary_path
+
+    @classmethod
+    @requires_cache
+    def get_function_symbols(cls) -> dict[int, ParsedSymbol]:
+        # helper to get only function symbols (not procs)
+        return {rva: sym for rva, sym in cls._symbols.items()
+                if sym.symbol_type == SymbolType.FUNCTION}
+
+    @classmethod
+    @requires_cache
+    def get_proc_symbols(cls) -> dict[int, ParsedSymbol]:
+        # helper to get only proc symbols
+        return {rva: sym for rva, sym in cls._symbols.items()
+                if sym.symbol_type == SymbolType.PROC}
+
+    @classmethod
+    @requires_cache
+    def find_symbol_by_address(cls, rva: int) -> ParsedSymbol | None:
+        # helper to find symbol by address
+        return cls._symbols.get(rva)
+
 
 # can run as a standalone script too
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"Usage: python {sys.argv[0]} <crystal binary>", file=sys.stderr)
         exit(1)
-    
-    data, file_type = determine_file(sys.argv[1])
 
-    if file_type == 2:
-        print("Symbols for windows crystal binaries are only saved in their .pdb files.\n"
-              "If you do not have access to it, you cannot use this.",
-              file=sys.stderr)
-        exit(1)
-    
-    syms = parse_data(data)
-    if syms is None:
-        exit()
+    binary_path = sys.argv[1]
 
-    from pprint import pp
-    # pp(syms)
-    for sym in syms:
-        if sym.type != 'STT_FUNC':
-            continue
+    # initialize symbol cache
+    # may error here but I'm nothing catching anything bc im lazy
+    SymbolCache.init_cache(binary_path)
 
-        if sym.name.startswith("*"):
-            parsed = parse_function(sym.name)
-            if parsed is None:
-                print("Failed to parse", sym.name)
-                exit()
+    # get all parsed symbols
+    symbols = SymbolCache.get_symbols()
 
-            fixed = {k: v for k, v in parsed.items() if v}
-            print(sym.name, fixed, sep=" ||| ")
-        elif sym.name.startswith("__crystal"):
-            print(f"CRYSTAL_FUNC: {sym.name}", file=sys.stderr)
+    print(f"Found {len(symbols)} parsed symbols\n")
+
+    # display parsed symbols
+    for rva, parsed_sym in symbols.items():
+        print(f"RVA: {rva:#x}")
+        print(f"  Type: {parsed_sym.symbol_type.name}")
+        print(f"  Original: {parsed_sym.orig_name}")
+        print(f"  Parsed data: {parsed_sym.symbol_data}")
+        print()

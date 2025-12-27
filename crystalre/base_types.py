@@ -25,7 +25,8 @@ _TYPE_CONVERSIONS = {
     ("char32_t", "unsigned __int32"), # weird one lol
     ("Char", "char32_t"),
 
-    ("Symbol", "unsigned int")
+    ("Symbol", "unsigned int"),
+    ("Void", "void")
 }
 
 CR_BASE_TYPES = [v for (v, _) in _TYPE_CONVERSIONS if v != "char32_t"]

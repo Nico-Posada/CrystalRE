@@ -20,7 +20,7 @@ def remove_naming_hook(hook):
         hook.unhook()
 
 def setup_name_characters():
-    # make crystal-specific characters valid in names
-    special_chars = "<> ()!,=*~"
+    # make some crystal-specific characters valid in names
+    special_chars = "<> ()!,=*~/+&"
     for char in special_chars:
         ida_name.set_cp_validity(ida_name.UCDR_MANGLED, ord(char))

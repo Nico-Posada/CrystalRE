@@ -41,54 +41,43 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.naming_hook = install_naming_hook()
         log("Naming hook installed")
         
-        file_path = ida_nalt.get_input_file_path()
+        binary_path = ida_nalt.get_input_file_path()
+
+        # initialize symbol cache
         try:
-            data, file_type = determine_file(file_path)
-            assert file_type == 1 # ELF
+            SymbolCache.init_cache(binary_path)
         except Exception as e:
-            warning(f"Unable to load binary at {file_path!r}. Skipping the rest of the initialization.")
+            warning(f"Unable to initialize symbol cache: {e!r}. Skipping the rest of initialization.")
             return
 
-        try:
-            syms = parse_data(data)
-        except Exception as e:
-            msg = e.args[0]
-            warning(f"{msg}. Skipping the rest of initialization.")
-            return
-        
-        for sym in syms:
-            # TODO: fix names that aren't function names too
-            if sym.type != 'STT_FUNC':
-                continue
-            
-            # all crystal symbols start with * or ~ (if anonymous proc)
-            if sym.name.startswith("*"):
-                parsed = parse_function(sym.name)
-                if parsed is None:
-                    warning(f"Failed to parse {sym.name}")
-                    continue
-                
-                func_info = {k: v for k, v in parsed.items() if v}
-                final_name = "*" # set the * to tell the name "demangler" that this is a crystal func
-                if 'self_type' in func_info: # owner is optional, so check if it exists first
+        # get all parsed symbols
+        symbols = SymbolCache.get_symbols()
+
+        # apply names to functions
+        for rva, parsed_sym in symbols.items():
+            final_name = "*" # prefix to tell the name demangler this is a crystal func
+
+            if parsed_sym.symbol_type == SymbolType.FUNCTION:
+                func_info = parsed_sym.symbol_data
+
+                # add self_type if present (owner is optional)
+                if 'self_type' in func_info:
                     final_name += func_info['self_type'] + "::"
-                final_name += func_info['name'] # name is required
-            elif sym.name.startswith("~proc"):
-                try:
-                    symbol_string, proc_num = parse_proc(sym.name)
-                except AssertionError as e:
-                    warning(f"Got err {repr(e)} while parsing {sym.name!r}")
-                    continue
-                
-                final_name = "*" # set the * to tell the name "demangler" that this is a crystal func
-                final_name += f"~{symbol_string}"
-                if proc_num:
-                    final_name += f"[{proc_num}]" # not standard but whatever
-            else:
-                continue
 
-            ida_name.set_name(sym.rva, final_name, ida_name.SN_NOWARN | ida_name.SN_NOCHECK | ida_name.SN_FORCE)
-            log(f"Set name {final_name} @ {sym.rva:#x}")
+                # add function name (required)
+                final_name += func_info['name']
+
+            elif parsed_sym.symbol_type == SymbolType.PROC:
+                proc_info = parsed_sym.symbol_data
+                final_name += f"~{proc_info['symbol_string']}"
+
+                # this part isn't standard but whatever
+                if proc_info['proc_num']:
+                    final_name += f"[{proc_info['proc_num']}]"
+
+            # set the name in IDA
+            ida_name.set_name(rva, final_name, ida_name.SN_NOWARN | ida_name.SN_NOCHECK | ida_name.SN_FORCE)
+            # log(f"Set name {final_name} @ {rva:#x}")
         
 
     def term(self) -> None:
