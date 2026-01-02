@@ -181,13 +181,18 @@ def parse_function(symbol_string):
             # Extract possible metaclass and strip off the ending # or ::
             if "@" in self_type:
                 self_type, metaclass = self_type.split("@", maxsplit=1)
-                result["metaclass"] = metaclass.rstrip(":#")
                 result["self_type"] = self_type
+                result["metaclass"] = metaclass.rstrip(":#")
+                result["class_method?"] = metaclass.endswith("::")
             else:
                 result["self_type"] = self_type.rstrip(":#")
+                result["class_method?"] = self_type.endswith("::")
             
         if result["args"]:
-            result["args"] = split_true_commas(result["args"]) 
+            result["args"] = split_true_commas(result["args"])
+        
+        # for good measure :)
+        result["name"] = result["name"].replace(".", "@")
         
         return result
 
@@ -210,13 +215,24 @@ def parse_proc(symbol_string: str):
     
     return symbol_string, proc_num
 
+# Weird helper funcs to see if a type exists in a union or something, beats me
+"""
+"~match<#{type.llvm_name}>"
+"""
+def parse_match(symbol_string: str):
+    assert symbol_string.startswith("~match<")
+    assert symbol_string.endswith(">")
+    
+    # the name is fine as-is, whatever
+    return symbol_string
+
 
 def parse_data(data: io.BytesIO):
     elf_file = ELFFile(data)
     symbol_table = elf_file.get_section_by_name('.symtab')
 
     if not symbol_table:
-        raise Exception("No .symtab section found in the ELF file.")
+        raise Exception("No .symtab section found in the ELF file (likely a stripped binary).")
 
     if not isinstance(symbol_table, SymbolTableSection):
         raise Exception("The .symtab section is not a symbol table.")
@@ -241,6 +257,7 @@ def requires_cache(func):
 class SymbolType(Enum):
     FUNCTION = auto()
     PROC = auto()
+    MATCH = auto()
     OTHER = auto()
 
 @dataclass(slots=True, frozen=True)
@@ -264,7 +281,7 @@ class SymbolCache:
         if file_type == 2:
             raise Exception("Windows binaries are not yet supported. Symbol information is only in .pdb files.")
 
-        raw_symbols = parse_data(data)
+        raw_symbols = parse_data(data) # can raise an exception if the input binary is stripped
         cls._symbols = {}
 
         # parse each symbol and cache parsed results
@@ -281,7 +298,7 @@ class SymbolCache:
                 if parsed is None:
                     continue
 
-                func_info = {k: v for k, v in parsed.items() if v}
+                func_info = {k: v for k, v in parsed.items() if v or isinstance(v, bool)}
                 parsed_symbol = ParsedSymbol(
                     rva=sym.rva,
                     symbol_type=SymbolType.FUNCTION,
@@ -304,7 +321,7 @@ class SymbolCache:
                     'symbol_string': symbol_string,
                     'proc_num': proc_num,
                     'args': proc_args[:-1],
-                    'return_type': proc_args[-1]
+                    'return_type': proc_args[-1],
                 }
 
                 parsed_symbol = ParsedSymbol(
@@ -313,9 +330,46 @@ class SymbolCache:
                     symbol_data=proc_info,
                     orig_name=sym.name
                 )
+            
+            # funcs that see if a type id matches a hardcoded list
+            elif sym.name.startswith("~match"):
+                match_info = {
+                    'name': parse_match(sym.name),
+                    # all these match funcstake a single type_id which is a UInt32
+                    'args': ['UInt32'],
+                    'return_type': "Bool"
+                }
+                
+                parsed_symbol = ParsedSymbol(
+                    rva=sym.rva,
+                    symbol_type=SymbolType.MATCH,
+                    symbol_data=match_info,
+                    orig_name=sym.name
+                )
+            
+            # Weird helper functions, keep as-is
+            elif sym.name.startswith("~") and \
+                any(sym.name.endswith(suffix) for suffix in [":init", ":read", ":const_init", ":const_read"]):
+                helper_info = {
+                    'name': sym.name,
+                    'args': [],
+                    'return_type': "Nil"
+                }
+                
+                parsed_symbol = ParsedSymbol(
+                    rva=sym.rva,
+                    symbol_type=SymbolType.OTHER,
+                    symbol_data=helper_info,
+                    orig_name=sym.name
+                )
             else:
-                # TODO: Maybe other types of symbols if it ever matters in the future
                 ...
+                # TODO: Maybe other types of symbols if it ever matters in the future.
+                # Also these weirdos:
+                # https://github.com/crystal-lang/crystal/blob/5bf7b19545169e1a96eb12a3a5ebb5c48d872739/src/compiler/crystal/codegen/class_var.cr#L334
+                # https://github.com/crystal-lang/crystal/blob/5bf7b19545169e1a96eb12a3a5ebb5c48d872739/src/compiler/crystal/codegen/types.cr#L190
+                # :read :init :const_init
+                # print(f"Got an else: {sym.name}")
 
             # store parsed symbol if we successfully parsed it
             if parsed_symbol:
@@ -394,6 +448,7 @@ if __name__ == "__main__":
 
     # display parsed symbols
     for rva, parsed_sym in symbols.items():
+        if "match" not in parsed_sym.orig_name: continue
         print(f"RVA: {rva:#x}")
         print(f"  Type: {parsed_sym.symbol_type.name}")
         print(f"  Original: {parsed_sym.orig_name}")

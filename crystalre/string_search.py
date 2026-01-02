@@ -12,14 +12,15 @@ def get_string_at(addr: int):
     length = ida_bytes.get_dword(addr + 8)
     
     # first verification
-    # note: strings of size 1 and 0 are ignored because it's more likely to match false positives
-    if type_id == 1 and bytesize == length and bytesize > 1:
+    # note: strings of size 0 are ignored because it's more likely to match false positives
+    if type_id == 1 and bytesize == length and bytesize > 0:
         # second verification
         str_data = ida_bytes.get_bytes(addr + 12, bytesize)
         try:
             decoded = str_data.decode('utf-8')
             if any([c < " " and c not in "\r\n\t" for c in decoded]):
-                raise UnicodeDecodeError
+                # Nope.
+                return None
         except (UnicodeDecodeError, AttributeError):
             # str_data was None, or it was garbage data
             return None
@@ -73,7 +74,7 @@ def find_and_define_strings():
             idc.create_struct(addr, total_size, "String")
 
             count += 1
-            info(f"Found String at {addr:#x}, size {total_size}")
+            # info(f"Found String at {addr:#x}, size {total_size}")
 
             # skip past this string to avoid overlapping detections (align too)
             addr += (total_size + 0x7) & ~0x7

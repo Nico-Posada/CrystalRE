@@ -1,11 +1,23 @@
 {
     "IDAMetadataDescriptorVersion": 1,
     "plugin": {
-        "name":        "CrystalRE",
-        "entryPoint":  "crystalre.py",
-        "categories":  [ "" ],
+        "name": "CrystalRE",
+        "entryPoint": "crystalre.py",
+        "categories": [
+            "file-parsers-and-loaders"
+        ],
         "idaVersions": ">=9.0",
         "description": "Make reversing crystal binaries less annoying.",
-        "version":     "0.0.1"
+        "version": "0.0.1",
+        "pythonDependencies": [
+            "regex",
+            "pyelftools"
+        ],
+        "urls": {
+            "repository": "https://github.com/Nico-Posada/CrystalRE"
+        },
+        "authors": [{
+            "name": "Nico Posada"
+        }]
     }
 }

@@ -14,4 +14,5 @@ def is_crystal_binary() -> bool:
     if not data:
         return False
 
-    return b"Crystal::" in data
+    # These are substrings I observed in even the most minimal stripped crystal binaries
+    return b"Crystal::" in data and b"CRYSTAL_LOAD_DEBUG_INFO" in data

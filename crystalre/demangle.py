@@ -1,3 +1,6 @@
+# The only way to show special characters in a function name without it defaulting to underscores
+# is to set up an ev_demangle_name hook (i think), so this is what this file is for
+
 import ida_idp
 import ida_name
 from .log import log
@@ -10,17 +13,8 @@ class NamingHook(ida_idp.IDP_Hooks):
             return [1, name[1:], 1]
         return 0
 
-def install_naming_hook():
-    hook = NamingHook()
-    hook.hook()
-    return hook
-
-def remove_naming_hook(hook):
-    if hook is not None:
-        hook.unhook()
-
-def setup_name_characters():
+def set_valid_chars():
     # make some crystal-specific characters valid in names
-    special_chars = "<> ()!,=*~/+&"
+    special_chars = "~, !@#%^&*()-=<>/+|"
     for char in special_chars:
         ida_name.set_cp_validity(ida_name.UCDR_MANGLED, ord(char))

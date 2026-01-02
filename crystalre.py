@@ -1,12 +1,11 @@
-from crystalre import *
-import logging
 import ida_idaapi
 import ida_kernwin
 import ida_nalt
 import ida_name
+import ida_hexrays
+import ida_netnode
 
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger("crystalre")
+from crystalre import *
 
 class CrystalRE(ida_idaapi.plugin_t):
     flags = ida_idaapi.PLUGIN_FIX
@@ -15,11 +14,16 @@ class CrystalRE(ida_idaapi.plugin_t):
     wanted_name: str = "CrystalRE"
     comment: str = "CrystalRE"
     help: str = "CrystalRE"
+    
+    NODE_NAME = "$ CrystalRE plugin"
 
     def init(self) -> int:
-        if not is_elf() or not is_crystal_binary():
+        self.initialized = False
+        if not ida_hexrays.init_hexrays_plugin() or \
+            not is_elf() or not is_crystal_binary():
             return ida_idaapi.PLUGIN_SKIP
 
+        self.nn = ida_netnode.netnode(self.NODE_NAME, 0, True)
         self.naming_hook = None
         log("Plugin CrystalRE initializing")
         addon = ida_kernwin.addon_info_t()
@@ -29,18 +33,18 @@ class CrystalRE(ida_idaapi.plugin_t):
         addon.url = "https://github.com/Nico-Posada/CrystalRE"
         addon.version = "0.0.1"
         ida_kernwin.register_addon(addon)
-        self.run(None)
+        self.run()
         return ida_idaapi.PLUGIN_KEEP            
 
-    def run(self, arg: int) -> None:
-        setup_name_characters()
-        apply_crystal_base_types()
-        log("Initialized default crystal types.")
-        total = find_and_define_strings()
-        log(f"Labeled {total} strings.")
-        self.naming_hook = install_naming_hook()
-        log("Naming hook installed")
-        
+    def run(self, arg: int = 0) -> None:
+        set_valid_chars()
+        self.naming_hook = NamingHook()
+        if not self.naming_hook.hook():
+            warning("Unable to install naming hook, function names in decompilations might look odd.")
+            self.naming_hook = None
+        else:
+            log("Naming hook installed")
+
         binary_path = ida_nalt.get_input_file_path()
 
         # initialize symbol cache
@@ -50,40 +54,37 @@ class CrystalRE(ida_idaapi.plugin_t):
             warning(f"Unable to initialize symbol cache: {e!r}. Skipping the rest of initialization.")
             return
 
-        # get all parsed symbols
-        symbols = SymbolCache.get_symbols()
+        # check if we've already initialized this idb
+        if self.nn.altval(0) != 1:
+            log("First time loading with CrystalRE, running full initialization")
+            self.init_for_new_idb()
+            self.nn.altset(0, 1)
+        else:
+            log("IDB already initialized, skipping string search and function renaming")
 
-        # apply names to functions
-        for rva, parsed_sym in symbols.items():
-            final_name = "*" # prefix to tell the name demangler this is a crystal func
+        self.initialized = True
+    
+    def init_for_new_idb(self):
+        # type stuff
+        apply_crystal_base_types()
+        log("Initialized default crystal types.")
 
-            if parsed_sym.symbol_type == SymbolType.FUNCTION:
-                func_info = parsed_sym.symbol_data
+        # string stuff
+        total = find_and_define_strings()
+        log(f"Labeled {total} strings.")
 
-                # add self_type if present (owner is optional)
-                if 'self_type' in func_info:
-                    final_name += func_info['self_type'] + "::"
-
-                # add function name (required)
-                final_name += func_info['name']
-
-            elif parsed_sym.symbol_type == SymbolType.PROC:
-                proc_info = parsed_sym.symbol_data
-                final_name += f"~{proc_info['symbol_string']}"
-
-                # this part isn't standard but whatever
-                if proc_info['proc_num']:
-                    final_name += f"[{proc_info['proc_num']}]"
-
-            # set the name in IDA
-            ida_name.set_name(rva, final_name, ida_name.SN_NOWARN | ida_name.SN_NOCHECK | ida_name.SN_FORCE)
-            # log(f"Set name {final_name} @ {rva:#x}")
+        # function stuff
+        set_function_names()
+        fix_function_data()
         
 
     def term(self) -> None:
+        if not getattr(self, "initialized", False):
+            return
+
         log("terminating")
-        if hasattr(self, "processor_hook"):
-            remove_naming_hook(self.naming_hook)
+        self.naming_hook and self.naming_hook.unhook()
+        self.initialized = False
 
 def PLUGIN_ENTRY():
     return CrystalRE()

@@ -39,13 +39,26 @@ def should_type_be_ptr(type_name: str):
 
 def name_to_tif(type_name: str):
     tif = ida_typeinf.tinfo_t()
-    if not tif.get_named_type(None, type_name):
-        # type doesn't exist in the idb, default to void*
-        tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
-    elif should_type_be_ptr(type_name) and not tif.create_ptr(tif):
-        warning(f"Failed to make type {type_name!r} a ptr")
+    if tif.get_named_type(None, type_name):
+        if should_type_be_ptr(type_name):
+            tif.create_ptr(tif)
+        return tif
+
+    # type doesn't exist in the idb, see if it's a pointer type?
+    elif type_name.startswith("Pointer(") and type_name.endswith(")"):
+        # strip Pointer(...) and recurse
+        tif = name_to_tif(type_name[len("Pointer("):-len(")")])
+        # make it a pointer if not None
+        if tif is not None:
+            tif.create_ptr(tif)
+            return tif
+        # default to _UNKNOWN *
+        else:
+            return ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PUNKNOWN)
     
-    return tif
+    # TODO: Handle more types like Range, Union, Array, etc
+    
+    return None
 
 def apply_crystal_base_types():
     global _TYPE_CONVERSIONS

@@ -1,16 +1,27 @@
-import ida_kernwin
+import logging
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger("CrystalRE")
+logger.propagate = False
+
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter(
+    "[{name} {levelname[0]}] {message}",
+    style="{"
+))
+logger.addHandler(handler)
 
 def log(msg: str) -> None:
-    ida_kernwin.msg(f"[CrystalRE] {msg}\n")
+    info(msg)
 
 def info(msg: str) -> None:
-    log(msg)
+    logger.info(msg)
 
 def warning(msg: str) -> None:
-    ida_kernwin.msg(f"[CrystalRE w] {msg}\n")
+    logger.warning(msg)
 
 def error(msg: str) -> None:
-    ida_kernwin.msg(f"[CrystalRE e] {msg}\n")
+    logger.error(msg)
 
 def debug(msg: str) -> None:
-    ida_kernwin.msg(f"[CrystalRE d] {msg}\n")
+    logger.debug(msg)
