@@ -4,8 +4,27 @@ import ida_nalt
 import ida_name
 import ida_hexrays
 import ida_netnode
+import ida_segment
+import ida_bytes
+import ida_ida
 
 from crystalre import *
+
+def is_elf() -> bool:
+    return ida_ida.inf_get_filetype() == ida_ida.f_ELF
+
+def is_crystal_binary() -> bool:
+    rodata = ida_segment.get_segm_by_name(".rodata")
+    if not rodata:
+        return False
+
+    data = ida_bytes.get_bytes(rodata.start_ea, rodata.size())
+    if not data:
+        return False
+
+    # These are substrings I observed in even the most minimal stripped crystal binaries
+    return b"Crystal::" in data and b"CRYSTAL_LOAD_DEBUG_INFO" in data
+
 
 class CrystalRE(ida_idaapi.plugin_t):
     flags = ida_idaapi.PLUGIN_FIX
@@ -25,6 +44,7 @@ class CrystalRE(ida_idaapi.plugin_t):
 
         self.nn = ida_netnode.netnode(self.NODE_NAME, 0, True)
         self.naming_hook = None
+        self.string_hook = None
         log("Plugin CrystalRE initializing")
         addon = ida_kernwin.addon_info_t()
         addon.id = "Nico-Posada.CrystalRE"
@@ -44,6 +64,13 @@ class CrystalRE(ida_idaapi.plugin_t):
             self.naming_hook = None
         else:
             log("Naming hook installed")
+
+        self.string_hook = StringCommenter()
+        if not self.string_hook.hook():
+            warning("Unable to install string commenter hook, string contents won't appear in decompiler.")
+            self.string_hook = None
+        else:
+            log("String commenter hook installed")
 
         binary_path = ida_nalt.get_input_file_path()
 
@@ -84,6 +111,7 @@ class CrystalRE(ida_idaapi.plugin_t):
 
         log("terminating")
         self.naming_hook and self.naming_hook.unhook()
+        self.string_hook and self.string_hook.unhook()
         self.initialized = False
 
 def PLUGIN_ENTRY():
