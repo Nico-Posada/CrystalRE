@@ -8,7 +8,7 @@
         ],
         "idaVersions": ">=9.0",
         "description": "Make reversing crystal binaries less annoying.",
-        "version": "0.0.1",
+        "version": "1.0.0",
         "pythonDependencies": [
             "regex",
             "pyelftools"
@@ -16,8 +16,17 @@
         "urls": {
             "repository": "https://github.com/Nico-Posada/CrystalRE"
         },
+        "keywords": [
+            "crystal",
+            "symbols",
+            "strings",
+            "elf",
+            "decompiler"
+        ],
+        "license": "MIT",
         "authors": [{
-            "name": "Nico Posada"
+            "name": "Nico Posada",
+            "email": "posadanico@outlook.com"
         }]
     }
 }
