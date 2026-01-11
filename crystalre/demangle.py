@@ -18,3 +18,7 @@ def set_valid_chars():
     special_chars = "~, !@#%^&*()-=<>/+|"
     for char in special_chars:
         ida_name.set_cp_validity(ida_name.UCDR_MANGLED, ord(char))
+        ida_name.set_cp_validity(ida_name.UCDR_TYPE, ord(char))
+        # need to ban some of these bc highlighting names with them enabled looks awful
+        if char not in " ()*,&":
+            ida_name.set_cp_validity(ida_name.UCDR_NAME, ord(char))

@@ -353,7 +353,8 @@ class SymbolCache:
                 helper_info = {
                     'name': sym.name,
                     'args': [],
-                    'return_type': "Nil"
+                    # init funcs are void, const_read/read return the object in the function name
+                    'return_type': "Nil" if sym.name.endswith("init") else sym.name[1:].rpartition(":")[0] or "Nil"
                 }
                 
                 parsed_symbol = ParsedSymbol(
@@ -365,10 +366,6 @@ class SymbolCache:
             else:
                 ...
                 # TODO: Maybe other types of symbols if it ever matters in the future.
-                # Also these weirdos:
-                # https://github.com/crystal-lang/crystal/blob/5bf7b19545169e1a96eb12a3a5ebb5c48d872739/src/compiler/crystal/codegen/class_var.cr#L334
-                # https://github.com/crystal-lang/crystal/blob/5bf7b19545169e1a96eb12a3a5ebb5c48d872739/src/compiler/crystal/codegen/types.cr#L190
-                # :read :init :const_init
                 # print(f"Got an else: {sym.name}")
 
             # store parsed symbol if we successfully parsed it
@@ -448,9 +445,10 @@ if __name__ == "__main__":
 
     # display parsed symbols
     for rva, parsed_sym in symbols.items():
-        if "match" not in parsed_sym.orig_name: continue
-        print(f"RVA: {rva:#x}")
-        print(f"  Type: {parsed_sym.symbol_type.name}")
-        print(f"  Original: {parsed_sym.orig_name}")
-        print(f"  Parsed data: {parsed_sym.symbol_data}")
-        print()
+        # if "match" not in parsed_sym.orig_name: continue
+        if parsed_sym.symbol_data.get("class_method?", False) and "metaclass" in parsed_sym.symbol_data:
+            print(f"RVA: {rva:#x}")
+            print(f"  Type: {parsed_sym.symbol_type.name}")
+            print(f"  Original: {parsed_sym.orig_name}")
+            print(f"  Parsed data: {parsed_sym.symbol_data}")
+            print()

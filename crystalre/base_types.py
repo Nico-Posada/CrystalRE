@@ -5,6 +5,7 @@ import ida_typeinf
 import ida_ida
 
 from .log import log, warning
+from typing import Any, Callable, Optional
 
 # All normal types
 _TYPE_CONVERSIONS = {
@@ -30,35 +31,180 @@ _TYPE_CONVERSIONS = {
 }
 
 CR_BASE_TYPES = [v for (v, _) in _TYPE_CONVERSIONS if v != "char32_t"]
+NO_POINTER_TYPES = ["Slice", "Union", "Tuple", "NamedTuple", "Range"]
 
 def _type_exists(name: str):
-    return bool(ida_typeinf.tinfo_t().get_named_type(None, name))
+    return ida_typeinf.tinfo_t().get_named_type(None, name)
 
 def should_type_be_ptr(type_name: str):
-    return type_name == "String" or type_name not in CR_BASE_TYPES
+    # return (type_name == "String" or type_name not in CR_BASE_TYPES) and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
+    return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
 
-def name_to_tif(type_name: str):
-    tif = ida_typeinf.tinfo_t()
-    if tif.get_named_type(None, type_name):
-        if should_type_be_ptr(type_name):
-            tif.create_ptr(tif)
-        return tif
+_TYPE_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.tinfo_t]]]] = []
+def _register_handler(signature: str):
+    global _TYPE_HANDLERS
+    assert "..." in signature
+    def wrapper(func):
+        nonlocal signature
+        _TYPE_HANDLERS.append((
+            tuple(signature.split("...")),
+            func
+        ))
+        return staticmethod(func)
+    return wrapper
 
-    # type doesn't exist in the idb, see if it's a pointer type?
-    elif type_name.startswith("Pointer(") and type_name.endswith(")"):
-        # strip Pointer(...) and recurse
-        tif = name_to_tif(type_name[len("Pointer("):-len(")")])
-        # make it a pointer if not None
+# NOTE: sret registers are rax, rdx, rcx, rsi
+# NOTE: structs passed by value are annoying to deal with, so im just disabling them until I can get a somewhat stable version going
+class BuiltinTypeHandler:
+    @staticmethod
+    def name_to_tif(type_name: str) -> Optional[ida_typeinf.tinfo_t]:
+        global _TYPE_HANDLERS
+        tif = ida_typeinf.tinfo_t()
+        if tif.get_named_type(None, type_name):
+            if should_type_be_ptr(type_name):
+                tif.create_ptr(tif)
+            return tif
+        
+        for (lhs, rhs), handler in _TYPE_HANDLERS:
+            if type_name.startswith(lhs) and type_name.endswith(rhs):
+                return handler(type_name[len(lhs):-len(rhs)])
+        
+        return None
+    
+    @_register_handler("Pointer(...)")
+    def handle_pointer(type_name: str):
+        tif = BuiltinTypeHandler.name_to_tif(type_name)
         if tif is not None:
             tif.create_ptr(tif)
             return tif
-        # default to _UNKNOWN *
         else:
+            # default to _UNKNOWN *
             return ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PUNKNOWN)
     
-    # TODO: Handle more types like Range, Union, Array, etc
+    # @_register_handler("StaticArray(...)")
+    def handle_staticarray(type_name: str):
+        return None
     
-    return None
+    @_register_handler("Array(...)")
+    def handle_array(type_name: str):
+        """
+        struct Array(xxx) {
+            UInt32 type_id;
+            Int32 size;
+            Int32 capacity;
+            Int32 offset_to_buffer;
+            xxx* buffer;
+        };
+        """
+
+        buffer_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        if buffer_tif is None:
+            # set it to void as a fallback if it's an unknown type
+            buffer_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
+
+        if not buffer_tif.create_ptr(buffer_tif):
+            warning(f"Failed to create ptr out of tif for {type_name!r}")
+            return None
+
+        udt = ida_typeinf.udt_type_data_t()
+
+        # add hardcoded fields
+        fields = [
+            ("type_id", "UInt32"),
+            ("size", "Int32"),
+            ("capacity", "Int32"),
+            ("offset_to_buffer", "Int32"),
+        ]
+
+        for field_name, field_type in fields:
+            udt_member = ida_typeinf.udt_member_t()
+            udt_member.name = field_name
+            udt_member.type = ida_typeinf.tinfo_t()
+            udt_member.type.get_named_type(None, field_type)
+            udt.push_back(udt_member)
+
+        # add buffer field (xxx*)
+        udt_member = ida_typeinf.udt_member_t()
+        udt_member.name = "buffer"
+        udt_member.type = buffer_tif
+        udt.push_back(udt_member)
+
+        # create tinfo_t from udt
+        tif = ida_typeinf.tinfo_t()
+        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
+            warning(f"Failed to create Array struct for {type_name!r}")
+            return None
+
+        # set named type so it's not anonymous
+        array_type_name = f"Array({type_name})"
+        tif.set_named_type(None, array_type_name)
+
+        # make it a pointer (Arrays are passed by reference)
+        if not tif.create_ptr(tif):
+            warning(f"Failed to create ptr to Array struct for {type_name!r}")
+            return None
+
+        return tif
+    
+    # @_register_handler("Slice(...)")
+    def handle_slice(type_name: str):
+        """
+        struct Slice(xxx) {
+            Int32 size;
+            Bool read_only;
+            xxx* pointer;
+        };
+        """
+
+        pointer_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        if pointer_tif is None:
+            # set it to void as a fallback if it's an unknown type
+            pointer_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
+
+        if not pointer_tif.create_ptr(pointer_tif):
+            warning(f"Failed to create ptr out of tif for {type_name!r}")
+            return None
+
+        udt = ida_typeinf.udt_type_data_t()
+
+        # add hardcoded fields
+        fields = [
+            ("size", "Int32"),
+            ("read_only", "Bool"),
+        ]
+
+        for field_name, field_type in fields:
+            udt_member = ida_typeinf.udt_member_t()
+            udt_member.name = field_name
+            udt_member.type = ida_typeinf.tinfo_t()
+            udt_member.type.get_named_type(None, field_type)
+            udt.push_back(udt_member)
+
+        # add pointer field (xxx*)
+        udt_member = ida_typeinf.udt_member_t()
+        udt_member.name = "pointer"
+        udt_member.type = pointer_tif
+        udt.push_back(udt_member)
+
+        # create tinfo_t from udt
+        tif = ida_typeinf.tinfo_t()
+        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
+            warning(f"Failed to create Slice struct for {type_name!r}")
+            return None
+
+        # set named type so it's not anonymous
+        slice_type_name = f"Slice({type_name})"
+        tif.set_named_type(None, slice_type_name)
+
+        # don't make it a pointer, Slices are passed by value
+        return tif
+    
+    # @_register_handler("(...)")
+    def handle_union(type_name: str):
+        return None
+
+def name_to_tif(type_name: str):
+    return BuiltinTypeHandler.name_to_tif(type_name)
 
 def apply_crystal_base_types():
     global _TYPE_CONVERSIONS

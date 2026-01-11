@@ -1,5 +1,6 @@
 import logging
 
+# TODO: make the level an option users can set...
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("CrystalRE")
 logger.propagate = False

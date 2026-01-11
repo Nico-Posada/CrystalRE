@@ -27,16 +27,17 @@ def is_crystal_binary() -> bool:
 
 
 class CrystalRE(ida_idaapi.plugin_t):
-    flags = ida_idaapi.PLUGIN_FIX
+    flags = ida_idaapi.PLUGIN_FIX | ida_idaapi.PLUGIN_MOD
 
     # Required attributes - must be set by subclasses
     wanted_name: str = "CrystalRE"
-    comment: str = "CrystalRE"
-    help: str = "CrystalRE"
+    comment: str = "Make reversing crystal binaries less annoying."
+    help: str = "Plugin that runs on IDB start to fix crystal lang decompilations. Installs some hooks and renames symbols."
     
     NODE_NAME = "$ CrystalRE plugin"
 
     def init(self) -> int:
+        return ida_idaapi.PLUGIN_SKIP
         self.initialized = False
         if not ida_hexrays.init_hexrays_plugin() or \
             not is_elf() or not is_crystal_binary():
@@ -45,6 +46,7 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.nn = ida_netnode.netnode(self.NODE_NAME, 0, True)
         self.naming_hook = None
         self.string_hook = None
+        self.rettype_hook = None
         log("Plugin CrystalRE initializing")
         addon = ida_kernwin.addon_info_t()
         addon.id = "Nico-Posada.CrystalRE"
@@ -56,7 +58,12 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.run()
         return ida_idaapi.PLUGIN_KEEP            
 
-    def run(self, arg: int = 0) -> None:
+    def run(self, arg: int = -1) -> None:
+        if arg != -1:
+            # stupid shortcut to make sure this only runs on startup and not via the dropdown.
+            # maybe I'll add dropdown support someday, who knows
+            return
+
         set_valid_chars()
         self.naming_hook = NamingHook()
         if not self.naming_hook.hook():
@@ -71,6 +78,13 @@ class CrystalRE(ida_idaapi.plugin_t):
             self.string_hook = None
         else:
             log("String commenter hook installed")
+
+        self.rettype_hook = ReturnTypeCommenter()
+        if not self.rettype_hook.hook():
+            warning("Unable to install return type commenter hook, return types won't appear in decompiler.")
+            self.rettype_hook = None
+        else:
+            log("Return type commenter hook installed")
 
         binary_path = ida_nalt.get_input_file_path()
 
@@ -112,6 +126,11 @@ class CrystalRE(ida_idaapi.plugin_t):
         log("terminating")
         self.naming_hook and self.naming_hook.unhook()
         self.string_hook and self.string_hook.unhook()
+        self.rettype_hook and self.rettype_hook.unhook()
+        
+        self.naming_hook = None
+        self.string_hook = None
+        self.rettype_hook = None
         self.initialized = False
 
 def PLUGIN_ENTRY():

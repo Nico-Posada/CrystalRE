@@ -10,28 +10,37 @@ import idc
 from .log import log, info, warning, error
 from .base_types import _type_exists
 
-def get_string_at(addr: int):
+def get_string_at(addr: int) -> bytes:
     type_id = ida_bytes.get_dword(addr)
-    bytesize = ida_bytes.get_dword(addr + 4)
-    length = ida_bytes.get_dword(addr + 8)
     
     # first verification
-    # note: strings of size 0 are ignored because it's more likely to match false positives
-    if type_id == 1 and bytesize == length and bytesize > 0:
+    if type_id == 1:
+        bytesize = ida_bytes.get_dword(addr + 4)
+
         # second verification
+        # NOTE: strings of size 0 are ignored because it's more likely to match false positives
+        if bytesize == 0 or bytesize > 1000:
+            return None
+
         str_data = ida_bytes.get_bytes(addr + 12, bytesize)
         try:
             decoded = str_data.decode('utf-8')
             if any([c < " " and c not in "\r\n\t" for c in decoded]):
                 # Nope.
                 return None
+            
+            length = ida_bytes.get_dword(addr + 8)
+            if len(decoded) != length:
+                # Nope.
+                return None
         except (UnicodeDecodeError, AttributeError):
             # str_data was None, or it was garbage data
             return None
+
+        return str_data
     else:
         return None
     
-    return str_data
 
 # NOTE: may not work on strings with chars that are >1 byte since bytesize and length will differ
 # causing the search to return a false negative for the string
@@ -111,37 +120,33 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
 
                 if type_name and type_name == "String":
                     # read the string data
-                    bytesize = ida_bytes.get_dword(addr + 4)
+                    str_data = get_string_at(addr)
+                    if str_data is not None:
+                        try:
+                            decoded = str_data.decode('utf-8')
 
-                    # sanity check on size
-                    if bytesize > 0 and bytesize < 1000:
-                        str_data = ida_bytes.get_bytes(addr + 12, bytesize)
-                        if str_data:
-                            try:
-                                decoded = str_data.decode('utf-8')
+                            # create treeloc for comment placement
+                            loc = ida_hexrays.treeloc_t()
+                            loc.ea = expr.ea
+                            loc.itp = ida_hexrays.ITP_SEMI
 
-                                # create treeloc for comment placement
-                                loc = ida_hexrays.treeloc_t()
-                                loc.ea = expr.ea
-                                loc.itp = ida_hexrays.ITP_SEMI
+                            # find parent statement for better placement
+                            p = self.cfunc.body.find_parent_of(expr)
+                            while p and p.op <= ida_hexrays.cot_last:
+                                p = self.cfunc.body.find_parent_of(p)
 
-                                # find parent statement for better placement
-                                p = self.cfunc.body.find_parent_of(expr)
-                                while p and p.op <= ida_hexrays.cot_last:
-                                    p = self.cfunc.body.find_parent_of(p)
+                            if p:
+                                if p.ea != ida_idaapi.BADADDR:
+                                    loc.ea = p.ea
+                                if p.op == ida_hexrays.cit_expr:
+                                    loc.itp = ida_hexrays.ITP_SEMI
+                                elif p.op == ida_hexrays.cit_if:
+                                    loc.itp = ida_hexrays.ITP_BRACE2
 
-                                if p:
-                                    if p.ea != ida_idaapi.BADADDR:
-                                        loc.ea = p.ea
-                                    if p.op == ida_hexrays.cit_expr:
-                                        loc.itp = ida_hexrays.ITP_SEMI
-                                    elif p.op == ida_hexrays.cit_if:
-                                        loc.itp = ida_hexrays.ITP_BRACE2
-
-                                # set comment directly
-                                self.cfunc.set_user_cmt(loc, f'"{decoded}"')
-                            except (UnicodeDecodeError, AttributeError):
-                                pass
+                            # set comment directly
+                            self.cfunc.set_user_cmt(loc, f'"{decoded}"')
+                        except (UnicodeDecodeError, AttributeError):
+                            pass
 
         return 0
 
@@ -160,4 +165,38 @@ class StringCommenter(ida_hexrays.Hexrays_Hooks):
         # traverse the ctree and add comments for String references
         visitor = StringRefVisitor(cfunc)
         visitor.apply_to(cfunc.body, None)
+        return 0
+
+
+class ReturnTypeCommenter(ida_hexrays.Hexrays_Hooks):
+    """hexrays hook that adds crystal return type comments to decompiled functions"""
+
+    def __init__(self):
+        super().__init__()
+
+    def maturity(self, cfunc, maturity):
+        # only process at final maturity level
+        if maturity != ida_hexrays.CMAT_FINAL:
+            return 0
+
+        from .symbols import SymbolCache
+
+        # get function address
+        func_ea = cfunc.entry_ea
+
+        # look up in symbol cache
+        symbols = SymbolCache.get_symbols()
+        if func_ea not in symbols:
+            return 0
+
+        parsed_sym = symbols[func_ea]
+        return_type = parsed_sym.symbol_data.get("return_type")
+
+        if not return_type:
+            return 0
+
+        # add comment above function signature
+        comment_text = f"Parsed return type: {return_type}"
+        idc.set_func_cmt(func_ea, comment_text, False)
+
         return 0
