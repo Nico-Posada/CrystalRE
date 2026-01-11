@@ -1,6 +1,7 @@
 import ida_funcs
 import ida_typeinf
 import ida_name
+import idc
 
 from .symbols import split_true_colons, SymbolCache, SymbolType
 from .base_types import name_to_tif
@@ -94,7 +95,7 @@ def fix_function_data():
             ret_tif = name_to_tif(return_type)
             if ret_tif is None:
                 # skip this function if we can't resolve the return type
-                warning(f"Skipping {parsed_sym.orig_name} - unable to resolve return type {return_type!r}")
+                # warning(f"Skipping {parsed_sym.orig_name} - unable to resolve return type {return_type!r}")
                 continue
 
         # check all argument types
@@ -103,7 +104,7 @@ def fix_function_data():
             arg_tif = name_to_tif(arg_type)
             if arg_tif is None:
                 # skip this function if we can't resolve any argument type
-                warning(f"Skipping {parsed_sym.orig_name} - unable to resolve arg type {arg_type!r}")
+                # warning(f"Skipping {parsed_sym.orig_name} - unable to resolve arg type {arg_type!r}")
                 break
             arg_tifs.append(arg_tif)
 

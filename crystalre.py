@@ -27,7 +27,7 @@ def is_crystal_binary() -> bool:
 
 
 class CrystalRE(ida_idaapi.plugin_t):
-    flags = ida_idaapi.PLUGIN_FIX | ida_idaapi.PLUGIN_MOD
+    flags = ida_idaapi.PLUGIN_FIX | ida_idaapi.PLUGIN_MOD# | ida_idaapi.PLUGIN_MULTI
 
     # Required attributes - must be set by subclasses
     wanted_name: str = "CrystalRE"
@@ -37,7 +37,7 @@ class CrystalRE(ida_idaapi.plugin_t):
     NODE_NAME = "$ CrystalRE plugin"
 
     def init(self) -> int:
-        return ida_idaapi.PLUGIN_SKIP
+        # return ida_idaapi.PLUGIN_SKIP
         self.initialized = False
         if not ida_hexrays.init_hexrays_plugin() or \
             not is_elf() or not is_crystal_binary():
