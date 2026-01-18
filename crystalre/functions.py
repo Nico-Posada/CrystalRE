@@ -2,9 +2,11 @@ import ida_funcs
 import ida_typeinf
 import ida_name
 import idc
+import ida_nalt
+import ida_hexrays
 
 from .symbols import split_true_colons, SymbolCache, SymbolType
-from .base_types import name_to_tif
+from .base_types import name_to_tif, name_to_retloc, should_type_be_ptr
 from .log import log, info, warning, debug
 
 import re
@@ -48,6 +50,39 @@ def set_function_names():
             # set the name in IDA
             ida_name.set_name(rva, final_name, ida_name.SN_NOWARN | ida_name.SN_NOCHECK | ida_name.SN_FORCE)
             # log(f"Set name {final_name} @ {rva:#x}")
+
+# TODO: this was hacked together and i feel like this can be done way better 
+def _try_set_retloc(return_type: str, ea: int, ret_type):
+    tif = ida_typeinf.tinfo_t()
+    fti = ida_typeinf.func_type_data_t()
+
+    if ida_nalt.get_tinfo(tif, ea) and tif.is_func():
+        if not tif.get_func_details(fti):
+            return False
+
+    # Set calling convention to __usercall (CM_CC_SPECIAL)
+    # This tells IDA to use explicit arglocs for args and return
+    fti.set_cc(ida_typeinf.CM_CC_SPECIAL)
+    
+    # set retloc if needed
+    retloc = name_to_retloc(return_type)
+    if retloc is None:
+        return
+
+    fti.rettype = ret_type
+    fti.retloc = retloc
+    fti.flags |= ida_typeinf.FTI_ARGLOCS | ida_typeinf.FTI_EXPLOCS
+
+    new_tif = ida_typeinf.tinfo_t()
+    if not new_tif.create_func(fti):
+        return False
+
+    if not ida_typeinf.apply_tinfo(ea, new_tif, ida_typeinf.TINFO_DEFINITE):
+        return False
+
+    ida_hexrays.mark_cfunc_dirty(ea, True) # Probably not needed?
+    # log(f"Got to end for {ea:#x} @ {ea:#x}")
+    return True
 
 # Sets all the correct number of function params and sets the correct arg/ret val types if it exists in the idb
 # TODO: If a binary contains dwarf data, IDA just assumes every function is of type `int __cdecl()` which makes decomps
@@ -100,12 +135,15 @@ def fix_function_data():
 
         # check all argument types
         arg_tifs = []
-        for arg_type in args:
+        for i, arg_type in enumerate(args):
             arg_tif = name_to_tif(arg_type)
             if arg_tif is None:
-                # skip this function if we can't resolve any argument type
-                # warning(f"Skipping {parsed_sym.orig_name} - unable to resolve arg type {arg_type!r}")
-                break
+                # edge case we can allow
+                if i > 0 or not should_add_self:
+                    # skip this function if we can't resolve any argument type
+                    break
+                # stick to _UNKNOWN* rather than void* again
+                arg_tif = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PUNKNOWN)
             arg_tifs.append(arg_tif)
 
         if len(arg_tifs) != len(args):
@@ -128,6 +166,10 @@ def fix_function_data():
                 funcarg.name = "type_id"
             elif should_add_self and i == 0:
                 funcarg.name = "self"
+                # self args *MUST* be ptrs if they're large structs
+                arg_tif: ida_typeinf.tinfo_t
+                if not arg_tif.is_ptr() and arg_tif.get_size() > 8:
+                    arg_tif.create_ptr(arg_tif)
             else:
                 # leave as default names that ida/other plugins can set
                 ...
@@ -144,6 +186,7 @@ def fix_function_data():
         # im a bit iffy on using TINFO_DEFINITE here, but it's the only way to get IDA to respect the number of args we set
         if ida_typeinf.apply_tinfo(rva, tif, ida_typeinf.TINFO_DEFINITE):
             count += 1
+            _try_set_retloc(return_type, rva, ret_tif)
             # info(f"Set type info for func @ {parsed_sym.rva:#x} ({parsed_sym.orig_name} => {args})")
         else:
             warning(f"Failed to apply function type for {parsed_sym.orig_name} @ {parsed_sym.rva:#x}")

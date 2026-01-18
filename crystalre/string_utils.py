@@ -42,8 +42,6 @@ def get_string_at(addr: int) -> bytes:
         return None
     
 
-# NOTE: may not work on strings with chars that are >1 byte since bytesize and length will differ
-# causing the search to return a false negative for the string
 def find_and_define_strings():
     if not _type_exists("String"):
         # String should 100% be defined at this point, use error log

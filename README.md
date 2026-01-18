@@ -2,13 +2,13 @@
 
 ## Overview
 
-CrystalRE is an IDA Pro plugin designed to enhance reverse engineering of binaries compiled from the Crystal programming language. Crystal uses a sophisticated symbol mangling scheme and custom runtime structures that standard disassemblers don't handle well. This plugin automatically demangles symbols, applies type information, and identifies runtime structures to make Crystal binaries easier to analyze.
+CrystalRE is an IDA Pro plugin designed to enhance reverse engineering of binaries compiled from the [Crystal programming language](https://crystal-lang.org/). Crystal uses a sophisticated symbol mangling scheme and custom runtime structures that IDA doesn't handle well on its own. This plugin automatically demangles symbols, applies type information, and identifies runtime structures to make Crystal binaries easier to analyze.
 
 ### What It Does
 
 **Symbol Demangling**
 
-Crystal encodes rich type information in symbol names, but in a way that IDA doesn't handle well at all. This plugin automatically extracts and displays this information in a readable format.
+Crystal encodes rich type information in symbol names, but in a way that IDA doesn't like. This plugin automatically extracts and displays this information in a readable format.
 
 Using the standalone parser in [symbols.py](./crystalre/symbols.py), we can see how these are parsed (a few examples):
 ```
@@ -96,6 +96,15 @@ Crystal's String type has a specific and predictable runtime layout. The plugin 
 - IDA Pro 9.0 or later with Hex-Rays Decompiler
 - Python 3 support enabled in IDA
 
+### Quick Installation (Recommended)
+
+1. Install IDA's [hcli](https://hcli.docs.hex-rays.com/)
+
+2. Install plugin
+```bash
+hcli plugin install CrystalRE
+```
+
 ### Manual Installation Steps
 
 1. Install dependencies:
@@ -128,12 +137,17 @@ The plugin operates automatically on first load. It:
 
 The plugin stores its state in the IDA database, so it won't re-run on subsequent loads. To reinitialize, delete the IDB file and reopen the binary.
 
+## Known Issues
+
+- If a binary has dwarf symbols and you load it with default options, every unhandled function will be of type `int __cdecl ()` and it ruins decompilations. This is an issue with crystal itself and not the plugin. The only way to fix this is to uncheck `Apply calling conventions` and `Function prototypes are definitive` when the _DWARF info_ pop-up appears.
+- If a `Proc` contains a closure, the crytsal codegen will inject the closure as the first arg. There's no way of knowing if this closure parameter has been injected from the symbol name alone, so we just assume all procs don't have closures. If you're analyzing a proc and the decomp look messed up, it's probably because the closure is the real first arg.
+- Some functions return structs via multiple registers, these do not decompile well and require manual intervention (for now)
+
 ## Limitations
 
 - Works best if symbols are included (there's no strip option when building, so most binaries include symbols)
 - Type inference limited to types in the IDA database
 - Optimized for x86-64 Linux binaries (32-bit binaries likely wont work well)
-- Some functions return structs via multiple registers, these do not decompile well and require manual intervention (for now)
 
 ## Credits
 

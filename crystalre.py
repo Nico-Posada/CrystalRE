@@ -53,7 +53,7 @@ class CrystalRE(ida_idaapi.plugin_t):
         addon.name = "CrystalRE"
         addon.producer = "Nico Posada"
         addon.url = "https://github.com/Nico-Posada/CrystalRE"
-        addon.version = "0.0.1"
+        addon.version = "1.0.0"
         ida_kernwin.register_addon(addon)
         self.run()
         return ida_idaapi.PLUGIN_KEEP            
@@ -117,6 +117,7 @@ class CrystalRE(ida_idaapi.plugin_t):
         # function stuff
         set_function_names()
         fix_function_data()
+        apply_known_functions()
         
 
     def term(self) -> None:

@@ -3,19 +3,13 @@
     "plugin": {
         "name": "CrystalRE",
         "entryPoint": "crystalre.py",
+        "version": "1.0.0",
+        "idaVersions": ">=9.0",
+        "description": "Make reversing crystal binaries less annoying.",
+        "license": "MIT",
         "categories": [
             "file-parsers-and-loaders"
         ],
-        "idaVersions": ">=9.0",
-        "description": "Make reversing crystal binaries less annoying.",
-        "version": "1.0.0",
-        "pythonDependencies": [
-            "regex",
-            "pyelftools"
-        ],
-        "urls": {
-            "repository": "https://github.com/Nico-Posada/CrystalRE"
-        },
         "keywords": [
             "crystal",
             "symbols",
@@ -23,10 +17,16 @@
             "elf",
             "decompiler"
         ],
-        "license": "MIT",
+        "pythonDependencies": [
+            "regex",
+            "pyelftools"
+        ],
         "authors": [{
             "name": "Nico Posada",
             "email": "posadanico@outlook.com"
-        }]
+        }],
+        "urls": {
+            "repository": "https://github.com/Nico-Posada/CrystalRE"
+        }
     }
 }
