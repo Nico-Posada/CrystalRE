@@ -1,12 +1,17 @@
 {
-    "__crystal_main": "void __crystal_main(int argc, char **argv)",
-    "__crystal_raise": "void __noreturn __crystal_raise(void *ex)",
-    "__crystal_raise_overflow": "void __noreturn __crystal_raise_overflow(void)",
-    "__crystal_raise_cast_failed": "void __noreturn __crystal_raise_cast_failed(void *from_type, void *to_type, void *location)",
-    "__crystal_malloc64": "void *__crystal_malloc64(unsigned __int64 size)",
-    "__crystal_malloc_atomic64": "void *__crystal_malloc_atomic64(unsigned __int64 size)",
-    "__crystal_realloc64": "void *__crystal_realloc64(void *ptr, unsigned __int64 size)",
-    "__crystal_get_exception": "unsigned __int64 __crystal_get_exception(void *ex)",
-    "__crystal_once_init": "void *__crystal_once_init(void)",
-    "__crystal_once": "void __crystal_once(bool *flag, void *initializer)"
+    "__crystal_main": "Void __crystal_main(Int32 argc, UInt8 **argv)",
+    "__crystal_raise": "Void __noreturn __crystal_raise(Void *ex)",
+    "__crystal_raise_overflow": "Void __noreturn __crystal_raise_overflow(void)",
+    "__crystal_raise_cast_failed": "Void __noreturn __crystal_raise_cast_failed(Void *from_type, Void *to_type, Void *location)",
+    "__crystal_malloc64": "Void* __crystal_malloc64(UInt64 size)",
+    "__crystal_malloc_atomic64": "Void* __crystal_malloc_atomic64(UInt64 size)",
+    "__crystal_realloc64": "Void* __crystal_realloc64(Void *ptr, UInt64 size)",
+    "__crystal_get_exception": "UInt64 __crystal_get_exception(void *ex)",
+    "__crystal_once_init": "Void* __crystal_once_init(void)",
+    "__crystal_once": "Void __crystal_once(Bool *flag, Void *initializer)",
+
+    "__crystal_malloc": "Void* __crystal_malloc(UInt32 size)",
+    "__crystal_malloc_atomic": "Void* __crystal_malloc_atomic(UInt32 size)",
+    "__crystal_realloc": "Void* __crystal_realloc(Void* pointer, UInt32 size)",
+    "__crystal_raise_string": "Void __noreturn __crystal_raise_string(UInt8* message)"
 }
