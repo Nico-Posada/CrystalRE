@@ -35,13 +35,13 @@ _TYPE_CONVERSIONS = {
 }
 
 CR_BASE_TYPES = [v for (v, _) in _TYPE_CONVERSIONS if v != "char32_t"]
-NO_POINTER_TYPES = ["Slice", "Union", "Tuple", "NamedTuple", "Range", "Proc"]
+NO_POINTER_TYPES = ["Slice", "Union", "Tuple", "NamedTuple", "Range", "Proc", "Atomic"]
 
 def _type_exists(name: str):
     return ida_typeinf.tinfo_t().get_named_type(None, name)
 
 def is_numeric_type(type_name: str):
-    return type_name in CR_BASE_TYPES and type_name != "String"
+    return type_name in CR_BASE_TYPES and type_name not in ("String", "Void")
 
 def should_type_be_ptr(type_name: str):
     return (type_name == "String" or type_name not in CR_BASE_TYPES) and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
@@ -252,6 +252,40 @@ class BuiltinTypeHandler:
         tif.set_named_type(None, proc_type_name)
 
         # don't make it a pointer, Procs are passed by value (16 bytes)
+        return tif
+    
+    @_register_handler("Atomic(...)")
+    def handle_atomic(type_name: str):
+        """
+        struct Atomic(...) {
+            ... value;
+        }
+        """
+
+        value_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        if value_tif is None:
+            # set it to void* as a fallback if it's an unknown type
+            value_tif = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PVOID)
+
+        udt = ida_typeinf.udt_type_data_t()
+
+        # add value field
+        udt_member = ida_typeinf.udt_member_t()
+        udt_member.name = "value"
+        udt_member.type = value_tif
+        udt.push_back(udt_member)
+
+        # create tinfo_t from udt
+        tif = ida_typeinf.tinfo_t()
+        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
+            warning(f"Failed to create Atomic struct for {type_name!r}")
+            return None
+
+        # set named type so it's not anonymous
+        atomic_type_name = f"Atomic({type_name})"
+        tif.set_named_type(None, atomic_type_name)
+
+        # don't make it a pointer, Atomics are passed by value
         return tif
 
 def name_to_tif(type_name: str):

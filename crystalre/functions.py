@@ -171,7 +171,7 @@ def fix_function_data():
                 funcarg.name = "self"
                 # self args *MUST* be ptrs if they're large structs and not builtin numeric types
                 arg_tif: ida_typeinf.tinfo_t
-                if not arg_tif.is_ptr() and arg_tif.get_size() > 8 and \
+                if not arg_tif.is_ptr() and \
                     not is_numeric_type(data.get("self_type", "")):
                     arg_tif.create_ptr(arg_tif)
             else:
