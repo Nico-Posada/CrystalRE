@@ -182,10 +182,15 @@ class ReturnTypeCommenter(ida_hexrays.Hexrays_Hooks):
         # get function address
         func_ea = cfunc.entry_ea
 
-        # look up in symbol cache
-        symbols = SymbolCache.get_symbols()
-        if func_ea not in symbols:
+        try:
+            # look up in symbol cache
+            symbols = SymbolCache.get_symbols()
+            if func_ea not in symbols:
+                return 0
+        except RuntimeError:
+            # we are in a stripped binary, abort
             return 0
+            
 
         parsed_sym = symbols[func_ea]
         return_type = parsed_sym.symbol_data.get("return_type")

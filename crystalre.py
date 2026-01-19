@@ -79,13 +79,6 @@ class CrystalRE(ida_idaapi.plugin_t):
         else:
             log("String commenter hook installed")
 
-        self.rettype_hook = ReturnTypeCommenter()
-        if not self.rettype_hook.hook():
-            warning("Unable to install return type commenter hook, return types won't appear in decompiler.")
-            self.rettype_hook = None
-        else:
-            log("Return type commenter hook installed")
-
         binary_path = ida_nalt.get_input_file_path()
 
         # initialize symbol cache
@@ -94,6 +87,14 @@ class CrystalRE(ida_idaapi.plugin_t):
         except Exception as e:
             warning(f"Unable to initialize symbol cache: {e!r}. Skipping the rest of initialization.")
             return
+        
+        # this hook is only relevant if we have symbols, so only set the hook after cache initialization
+        self.rettype_hook = ReturnTypeCommenter()
+        if not self.rettype_hook.hook():
+            warning("Unable to install return type commenter hook, return types won't appear in decompiler.")
+            self.rettype_hook = None
+        else:
+            log("Return type commenter hook installed")
 
         # check if we've already initialized this idb
         if self.nn.altval(0) != 1:
