@@ -45,15 +45,15 @@ def should_type_be_ptr(type_name: str):
     # return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
 
 _TYPE_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.tinfo_t]]]] = []
-def _register_handler(signature: str):
+def _register_handler(*signatures: str):
     global _TYPE_HANDLERS
-    assert "..." in signature
+    assert all("..." in signature for signature in signatures)
     def wrapper(func):
-        nonlocal signature
-        _TYPE_HANDLERS.append((
+        nonlocal signatures
+        _TYPE_HANDLERS.extend((
             tuple(signature.split("...")),
             func
-        ))
+        ) for signature in signatures)
         return staticmethod(func)
     return wrapper
 
@@ -63,6 +63,11 @@ class BuiltinTypeHandler:
     @staticmethod
     def name_to_tif(type_name: str) -> Optional[ida_typeinf.tinfo_t]:
         global _TYPE_HANDLERS
+        
+        # edge case for `&Proc`, it should just be treated as `Proc`
+        if type_name.startswith("&Proc"):
+            type_name = type_name[1:]
+        
         tif = ida_typeinf.tinfo_t()
         if tif.get_named_type(None, type_name):
             if should_type_be_ptr(type_name):
