@@ -40,6 +40,9 @@ NO_POINTER_TYPES = ["Slice", "Union", "Tuple", "NamedTuple", "Range", "Proc"]
 def _type_exists(name: str):
     return ida_typeinf.tinfo_t().get_named_type(None, name)
 
+def is_numeric_type(type_name: str):
+    return type_name in CR_BASE_TYPES and type_name != "String"
+
 def should_type_be_ptr(type_name: str):
     return (type_name == "String" or type_name not in CR_BASE_TYPES) and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
     # return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)

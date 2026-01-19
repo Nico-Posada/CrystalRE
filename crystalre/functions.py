@@ -6,7 +6,7 @@ import ida_nalt
 import ida_hexrays
 
 from .symbols import split_true_colons, SymbolCache, SymbolType
-from .base_types import name_to_tif, name_to_retloc, should_type_be_ptr
+from .base_types import name_to_tif, name_to_retloc, is_numeric_type
 from .log import log, info, warning, debug
 
 import re
@@ -169,9 +169,10 @@ def fix_function_data():
                 funcarg.name = "type_id"
             elif should_add_self and i == 0:
                 funcarg.name = "self"
-                # self args *MUST* be ptrs if they're large structs
+                # self args *MUST* be ptrs if they're large structs and not builtin numeric types
                 arg_tif: ida_typeinf.tinfo_t
-                if not arg_tif.is_ptr() and arg_tif.get_size() > 8:
+                if not arg_tif.is_ptr() and arg_tif.get_size() > 8 and \
+                    not is_numeric_type(data.get("self_type", "")):
                     arg_tif.create_ptr(arg_tif)
             else:
                 # leave as default names that ida/other plugins can set
