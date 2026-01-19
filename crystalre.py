@@ -47,6 +47,7 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.naming_hook = None
         self.string_hook = None
         self.rettype_hook = None
+        self.initalized_cache = False
         log("Plugin CrystalRE initializing")
         addon = ida_kernwin.addon_info_t()
         addon.id = "Nico-Posada.CrystalRE"
@@ -84,17 +85,19 @@ class CrystalRE(ida_idaapi.plugin_t):
         # initialize symbol cache
         try:
             SymbolCache.init_cache(binary_path)
+            self.initalized_cache = True
         except Exception as e:
-            warning(f"Unable to initialize symbol cache: {e!r}. Skipping the rest of initialization.")
-            return
+            warning(f"Unable to initialize symbol cache: {e!r}. Likely a stripped binary.")
+            self.initalized_cache = False
         
-        # this hook is only relevant if we have symbols, so only set the hook after cache initialization
-        self.rettype_hook = ReturnTypeCommenter()
-        if not self.rettype_hook.hook():
-            warning("Unable to install return type commenter hook, return types won't appear in decompiler.")
-            self.rettype_hook = None
-        else:
-            log("Return type commenter hook installed")
+        # this hook is only relevant if we have symbols
+        if self.initalized_cache:
+            self.rettype_hook = ReturnTypeCommenter()
+            if not self.rettype_hook.hook():
+                warning("Unable to install return type commenter hook, return types won't appear in decompiler.")
+                self.rettype_hook = None
+            else:
+                log("Return type commenter hook installed")
 
         # check if we've already initialized this idb
         if self.nn.altval(0) != 1:
@@ -116,9 +119,10 @@ class CrystalRE(ida_idaapi.plugin_t):
         log(f"Labeled {total} strings.")
 
         # function stuff
-        set_function_names()
-        fix_function_data()
-        apply_known_functions()
+        if self.initalized_cache:
+            set_function_names()
+            fix_function_data()
+            apply_known_functions()
         
 
     def term(self) -> None:
