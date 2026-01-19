@@ -99,6 +99,9 @@ def fix_function_data():
         should_add_self = not data.get("class_method?", True)
         has_implicit_type_id = False
         
+        # Nil args are literally nothing, they can be removed
+        args = [arg for arg in args if arg != "Nil"]
+        
         # For the funcs that have a # in them, they pass the `this` variable as the first arg
         if should_add_self:
             args.insert(0, data.get("self_type", "Pointer(Void)"))
