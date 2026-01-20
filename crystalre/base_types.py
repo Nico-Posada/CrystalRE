@@ -8,9 +8,6 @@ from .log import log, warning
 from .symbols import split_true_commas
 from typing import Callable, Optional
 
-# Scattered return registers for x64 (in order)
-SRET_REGS = ["rax", "rdx", "rcx", "r8"]
-
 # All normal types
 _TYPE_CONVERSIONS = {
     ("Bool", "bool"),
@@ -60,8 +57,6 @@ def _register_handler(*signatures: str):
         return staticmethod(func)
     return wrapper
 
-# NOTE: sret registers are rax, rdx, rcx, rsi
-# NOTE: structs passed by value are annoying to deal with, so im just disabling them until I can get a somewhat stable version going
 class BuiltinTypeHandler:
     @staticmethod
     def name_to_tif(type_name: str) -> Optional[ida_typeinf.tinfo_t]:
@@ -287,82 +282,16 @@ class BuiltinTypeHandler:
 
         # don't make it a pointer, Atomics are passed by value
         return tif
+    
+    @_register_handler("....class")
+    def handle_class(type_name: str):
+        # .class types are just UInt32's lol
+        tif = ida_typeinf.tinfo_t()
+        tif.get_named_type(None, "UInt32")
+        return tif
 
 def name_to_tif(type_name: str):
     return BuiltinTypeHandler.name_to_tif(type_name)
-
-def create_scattered_retloc(parts: list[tuple[int, int, str]]) -> ida_typeinf.argloc_t:
-    """
-    Create a scattered argloc from a list of (offset, size, register_name) tuples.
-
-    Example: [(0, 4, "rax"), (4, 4, "rdx"), (8, 4, "rcx")]
-    Results in: <0:rax.4, 4:rdx.4, 8:rcx.4>
-    """
-    scattered = ida_typeinf.scattered_aloc_t()
-
-    for off, size, reg_name in parts:
-        part = ida_typeinf.argpart_t()
-        part.off = off
-        part.size = size
-        part.set_reg1(ida_idp.str2reg(reg_name))
-        scattered.push_back(part)
-
-    retloc = ida_typeinf.argloc_t()
-    retloc.consume_scattered(scattered)
-    return retloc
-
-_RETLOC_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.argloc_t]]]] = []
-
-def _register_retloc_handler(signature: str):
-    """Register a handler for return locations matching a signature pattern."""
-    global _RETLOC_HANDLERS
-    assert "..." in signature
-    def wrapper(func):
-        nonlocal signature
-        _RETLOC_HANDLERS.append((
-            tuple(signature.split("...")),
-            func
-        ))
-        return staticmethod(func)
-    return wrapper
-
-class BuiltinRetlocHandler:
-    @staticmethod
-    def name_to_retloc(type_name: str) -> Optional[ida_typeinf.argloc_t]:
-        global _RETLOC_HANDLERS
-
-        # check registered handlers first
-        for (lhs, rhs), handler in _RETLOC_HANDLERS:
-            if type_name.startswith(lhs) and type_name.endswith(rhs):
-                if rhs:
-                    return handler(type_name[len(lhs):-len(rhs)])
-                else:
-                    return handler(type_name[len(lhs):])
-
-        # TODO: other checks? idk
-        return None
-
-    @_register_retloc_handler("Slice(...)")
-    def handle_slice_retloc(type_name: str):
-        # <0:rax.4, 4:rdx.1, 8:rcx.8>
-        return create_scattered_retloc([
-            (0, 4, SRET_REGS[0]),   # size
-            (4, 1, SRET_REGS[1]),   # read_only
-            (8, 8, SRET_REGS[2]),   # pointer
-        ])
-
-    # @_register_retloc_handler("Tuple(...)")
-    @staticmethod
-    def handle_tuple_retloc(type_name: str):
-        return None
-
-    # @_register_retloc_handler("NamedTuple(...)")
-    @staticmethod
-    def handle_namedtuple_retloc(type_name: str):
-        return None
-
-def name_to_retloc(type_name: str):
-    return BuiltinRetlocHandler.name_to_retloc(type_name)
 
 def _get_expected_tif(ida_type_name: str):
     tif = ida_typeinf.tinfo_t()

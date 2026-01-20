@@ -7,6 +7,7 @@ import ida_netnode
 import ida_segment
 import ida_bytes
 import ida_ida
+import ida_typeinf
 
 from crystalre import *
 
@@ -80,6 +81,13 @@ class CrystalRE(ida_idaapi.plugin_t):
         else:
             log("String commenter hook installed")
 
+        # register custom calling convention
+        cc_id = register_cc()
+        if cc_id != ida_typeinf.CM_CC_INVALID:
+            log(f"CrystalCC registered with ID: {cc_id:#x}")
+        else:
+            warning("Failed to register CrystalCC")
+
         binary_path = ida_nalt.get_input_file_path()
 
         # initialize symbol cache
@@ -87,7 +95,7 @@ class CrystalRE(ida_idaapi.plugin_t):
             SymbolCache.init_cache(binary_path)
             self.initalized_cache = True
         except Exception as e:
-            warning(f"Unable to initialize symbol cache: {e!r}. Likely a stripped binary.")
+            warning(f"Unable to initialize symbol cache: {e!r}.")
             self.initalized_cache = False
         
         # this hook is only relevant if we have symbols
@@ -133,7 +141,8 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.naming_hook and self.naming_hook.unhook()
         self.string_hook and self.string_hook.unhook()
         self.rettype_hook and self.rettype_hook.unhook()
-        
+        unregister_cc()
+
         self.naming_hook = None
         self.string_hook = None
         self.rettype_hook = None
