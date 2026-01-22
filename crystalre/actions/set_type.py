@@ -2,6 +2,8 @@ import ida_hexrays
 import ida_typeinf
 import ida_kernwin
 import idaapi
+from dataclasses import dataclass
+from typing import Optional
 
 try:
     from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
@@ -17,10 +19,41 @@ ACTION_CRYSTAL_SETTYPE = "crystalre:setcrystaltype"
 
 # TODO: remove a lot of code duplication once this is stable
 
+
+@dataclass(frozen=True, slots=True)
+class LvarItemInfo:
+    name: str
+    current_type: Optional[ida_typeinf.tinfo_t]
+    lvar: ida_hexrays.lvar_t
+    cfunc: ida_hexrays.cfunc_t
+
+
+@dataclass(frozen=True, slots=True)
+class GlobalItemInfo:
+    name: str
+    ea: int
+    current_type: Optional[ida_typeinf.tinfo_t]
+
+
+@dataclass(frozen=True, slots=True)
+class RetTypeItemInfo:
+    name: str
+    current_type: Optional[ida_typeinf.tinfo_t]
+    cfunc: ida_hexrays.cfunc_t
+
 class SetTypePopupHook(ida_hexrays.Hexrays_Hooks):
     def populating_popup(self, widget, popup, vu):
         # attach action to context menu in decompiler view
         idaapi.attach_action_to_popup(widget, popup, ACTION_CRYSTAL_SETTYPE, None)
+        return 0
+
+
+class SetTypeDisasmHook(ida_kernwin.UI_Hooks):
+    def finish_populating_widget_popup(self, widget, popup):
+        # attach action to context menu in disassembly view
+        widget_type = ida_kernwin.get_widget_type(widget)
+        if widget_type == ida_kernwin.BWN_DISASM:
+            idaapi.attach_action_to_popup(widget, popup, ACTION_CRYSTAL_SETTYPE, None)
         return 0
 
 
@@ -42,7 +75,7 @@ class CrystalTypeDialog(QDialog):
         self.edit_type = QLineEdit()
 
         # pre-fill with current type
-        current_type_str = self._safe_print_type(item_info.get('current_type'))
+        current_type_str = self._safe_print_type(item_info.current_type)
         self.edit_type.setText(current_type_str)
         self.edit_type.selectAll()
 
@@ -101,48 +134,58 @@ class SetTypeAction(idaapi.action_handler_t):
         idaapi.action_handler_t.__init__(self)
 
     def activate(self, ctx):
-        # get current decompiler view
+        # try to get decompiler view
         vdui = idaapi.get_widget_vdui(ctx.widget)
-        if not vdui:
-            return 0
 
-        # get item under cursor
-        if not vdui.get_current_item(ida_hexrays.USE_KEYBOARD):
-            return 0
+        if vdui:
+            # decompiler view - use existing logic
+            if not vdui.get_current_item(ida_hexrays.USE_KEYBOARD):
+                return 0
 
-        # determine what type of item we're hovering over
-        item_info = self._get_retypeable_item(vdui)
-        if not item_info:
-            print("Cannot retype this item")
-            return 0
+            item_info = self._get_retypeable_item(vdui)
+            if not item_info:
+                warning("Cannot retype this item")
+                return 0
 
-        # show crystal type setter dialog
-        dialog = CrystalTypeDialog(item_info)
-        if dialog.exec_():
-            crystal_type = dialog.get_type_string()
-            if crystal_type:
-                self._apply_crystal_type(item_info, crystal_type)
-                vdui.refresh_view(True)
+            # show crystal type setter dialog
+            dialog = CrystalTypeDialog(item_info)
+            if dialog.exec_():
+                crystal_type = dialog.get_type_string()
+                if crystal_type:
+                    self._apply_crystal_type(item_info, crystal_type)
+                    vdui.refresh_view(True)
+        else:
+            # disassembly view - handle globals only
+            item_info = self._get_disasm_item()
+            if not item_info:
+                warning("Cannot retype this item")
+                return 0
+
+            # show crystal type setter dialog
+            dialog = CrystalTypeDialog(item_info)
+            if dialog.exec_():
+                crystal_type = dialog.get_type_string()
+                if crystal_type:
+                    self._apply_crystal_type(item_info, crystal_type)
 
         return 1
 
     def update(self, ctx):
-        # enable only in decompiler view
+        # enable in both decompiler and disassembly views
+        # check if we're in a decompiler view
         vdui = idaapi.get_widget_vdui(ctx.widget)
         if vdui:
             return idaapi.AST_ENABLE_FOR_WIDGET
+
+        # check if we're in disassembly view with a valid address
+        widget_type = ida_kernwin.get_widget_type(ctx.widget)
+        if widget_type == ida_kernwin.BWN_DISASM:
+            return idaapi.AST_ENABLE_FOR_WIDGET
+
         return idaapi.AST_DISABLE_FOR_WIDGET
 
     def _get_retypeable_item(self, vdui):
-        """
-        returns dict with:
-            - 'type': 'lvar' | 'global' | 'rettype' | None
-            - 'name': variable/field name
-            - 'ea': effective address (for globals)
-            - 'current_type': current tinfo_t
-            - 'lvar': lvar_t object (for local vars)
-            - 'cfunc': cfunc_t object (for local vars/params/rettypes)
-        """
+        """Get item information from decompiler view"""
         cit = vdui.item.citype
 
         # function (for return type)
@@ -151,23 +194,21 @@ class SetTypeAction(idaapi.action_handler_t):
             if vdui.cfunc.get_func_type(func_tif):
                 func_data = ida_typeinf.func_type_data_t()
                 if func_tif.get_func_details(func_data):
-                    return {
-                        'type': 'rettype',
-                        'name': idaapi.get_name(vdui.cfunc.entry_ea),
-                        'current_type': func_data.rettype,
-                        'cfunc': vdui.cfunc
-                    }
+                    return RetTypeItemInfo(
+                        name=idaapi.get_name(vdui.cfunc.entry_ea),
+                        current_type=func_data.rettype,
+                        cfunc=vdui.cfunc
+                    )
 
         # local variable
         elif cit == ida_hexrays.VDI_LVAR:
             lvar = vdui.item.l
-            return {
-                'type': 'lvar',
-                'name': lvar.name,
-                'current_type': lvar.type(),
-                'lvar': lvar,
-                'cfunc': vdui.cfunc
-            }
+            return LvarItemInfo(
+                name=lvar.name,
+                current_type=lvar.type(),
+                lvar=lvar,
+                cfunc=vdui.cfunc
+            )
 
         # expression (could be parameter, global, struct member access)
         elif cit == ida_hexrays.VDI_EXPR:
@@ -177,26 +218,48 @@ class SetTypeAction(idaapi.action_handler_t):
             if expr.op == ida_hexrays.cot_var:
                 # could be local var or parameter
                 lvar = vdui.cfunc.get_lvars()[expr.v.idx]
-                return {
-                    'type': 'lvar',
-                    'name': lvar.name,
-                    'current_type': expr.type,
-                    'lvar': lvar,
-                    'cfunc': vdui.cfunc
-                }
+                return LvarItemInfo(
+                    name=lvar.name,
+                    current_type=expr.type,
+                    lvar=lvar,
+                    cfunc=vdui.cfunc
+                )
 
             # check for global variable
             elif expr.op == ida_hexrays.cot_obj:
                 ea = expr.obj_ea
-                return {
-                    'type': 'global',
-                    'name': idaapi.get_name(ea),
-                    'ea': ea,
-                    'current_type': expr.type
-                }
+                return GlobalItemInfo(
+                    name=idaapi.get_name(ea),
+                    ea=ea,
+                    current_type=expr.type
+                )
 
         return None
-    
+
+    def _get_disasm_item(self):
+        """Get item info from disassembly view (globals only)"""
+        # get current address under cursor
+        ea = idaapi.get_screen_ea()
+        if ea == idaapi.BADADDR:
+            return None
+
+        # get name at this address
+        name = idaapi.get_name(ea)
+        if not name:
+            return None
+
+        # get current type if it exists
+        tif = ida_typeinf.tinfo_t()
+        if not idaapi.get_tinfo(tif, ea):
+            # no type defined yet, that's okay - we'll set one
+            tif = None
+
+        return GlobalItemInfo(
+            name=name,
+            ea=ea,
+            current_type=tif
+        )
+
     # Using `name_to_tif` creates the type if it doesn't exist in the db,
     # this is a safeguard to make sure wonky names don't get added by mistake
     def _show_warning(self, orig_type: str):
@@ -239,32 +302,30 @@ class SetTypeAction(idaapi.action_handler_t):
         return tif
 
     def _apply_crystal_type(self, item_info, crystal_type):
-        item_type = item_info['type']
-
-        if item_type == 'lvar':
+        if isinstance(item_info, LvarItemInfo):
             # local variable or parameter
             self._apply_lvar_type(item_info, crystal_type)
-        elif item_type == 'global':
+        elif isinstance(item_info, GlobalItemInfo):
             # global variable
             self._apply_global_type(item_info, crystal_type)
-        elif item_type == 'rettype':
+        elif isinstance(item_info, RetTypeItemInfo):
             # function return type
             self._apply_rettype(item_info, crystal_type)
         else:
-            warning(f"Unsupported item type: {item_type}")
+            warning(f"Unsupported item type: {type(item_info)}")
             return False
 
         return True
 
-    def _apply_lvar_type(self, item_info, crystal_type):
+    def _apply_lvar_type(self, item_info: LvarItemInfo, crystal_type):
         # parse the type string
         tif = self._parse_type_string(crystal_type)
         if tif is None:
             return False
 
         # get the lvar and create user info
-        lvar = item_info['lvar']
-        cfunc = item_info['cfunc']
+        lvar = item_info.lvar
+        cfunc = item_info.cfunc
 
         # check if this is a function parameter
         if lvar.is_arg_var:
@@ -283,7 +344,7 @@ class SetTypeAction(idaapi.action_handler_t):
             if ida_hexrays.modify_user_lvar_info(cfunc.entry_ea, ida_hexrays.MLI_TYPE, lsi):
                 return True
             else:
-                warning(f"Failed to modify user lvar info for '{item_info['name']}'")
+                warning(f"Failed to modify user lvar info for '{item_info.name}'")
                 return False
 
     def _apply_param_type(self, cfunc, lvar, tif, crystal_type):
@@ -326,14 +387,14 @@ class SetTypeAction(idaapi.action_handler_t):
             warning(f"Failed to apply new function type")
             return False
 
-    def _apply_rettype(self, item_info, crystal_type):
+    def _apply_rettype(self, item_info: RetTypeItemInfo, crystal_type):
         """modify function prototype to change return type"""
         # parse the type string
         tif = self._parse_type_string(crystal_type)
         if tif is None:
             return False
 
-        cfunc = item_info['cfunc']
+        cfunc = item_info.cfunc
 
         # get current function type
         func_tif = ida_typeinf.tinfo_t()
@@ -363,8 +424,8 @@ class SetTypeAction(idaapi.action_handler_t):
             warning(f"Failed to apply new function type")
             return False
 
-    def _apply_global_type(self, item_info, crystal_type):
-        ea = item_info['ea']
+    def _apply_global_type(self, item_info: GlobalItemInfo, crystal_type):
+        ea = item_info.ea
 
         # parse the type string
         tif = self._parse_type_string(crystal_type)
@@ -391,17 +452,34 @@ def register_type_action():
         warning("Failed to register type setter action")
         return None
 
-    # install popup hook
+    # install popup hook for decompiler view
     popup_hook = SetTypePopupHook()
     if not popup_hook.hook():
         warning("Failed to install type setter popup hook")
         idaapi.unregister_action(ACTION_CRYSTAL_SETTYPE)
         return None
 
-    return popup_hook
-
-
-def unregister_type_action(popup_hook):
-    if popup_hook:
+    # install popup hook for disassembly view
+    disasm_hook = SetTypeDisasmHook()
+    if not disasm_hook.hook():
+        warning("Failed to install type setter disasm hook")
         popup_hook.unhook()
+        idaapi.unregister_action(ACTION_CRYSTAL_SETTYPE)
+        return None
+
+    return (popup_hook, disasm_hook)
+
+
+def unregister_type_action(hooks):
+    if hooks:
+        # handle both tuple (new) and single hook (old) for backward compatibility
+        if isinstance(hooks, tuple):
+            popup_hook, disasm_hook = hooks
+            if popup_hook:
+                popup_hook.unhook()
+            if disasm_hook:
+                disasm_hook.unhook()
+        else:
+            # old single hook
+            hooks.unhook()
     idaapi.unregister_action(ACTION_CRYSTAL_SETTYPE)
