@@ -39,6 +39,38 @@ Using the parsed symbol information, the plugin automatically sets correct funct
 
 Crystal's String type has a specific and predictable runtime layout. The plugin scans the binary to identify and label String objects, making them easy to reference and understand.
 
+**Set `__crystal` Calling Convention Action**
+
+`__crystal` is a custom calling convention the plugin registers. x86_64 compiled binaries use the normal __fastcall convention, but structs that are passed by value typically have the struct's contents "inlined" in the function parameters. Take this function for example:
+
+```crystal
+def do_thing(a : Int32, b : Slice(UInt32)) : Nil
+end
+```
+
+Slice(T) structs are defined like this
+```c
+struct Slice(T) {
+  Int32 size; // offset 0
+  Bool read_only; // offset 4
+  T* pointer; // offset 8
+};
+```
+
+Since this struct is <= 32 bytes in size it'll get passed by value. Notice how `size` and `read_only` fit in 8 bytes, so one might think that they can be passed together in a single register (IDA assumes this too!), but that is not the case. Instead, the compiler essentially turns the function into this
+
+```crystal
+# NOTE: the symbol still shows Slice(T), this is just to showcase how each member gets split up
+def do_thing(a : Int32, b.size : Int32, b.read_only : Bool, b.pointer : Pointer(T))
+end
+```
+
+So if you set the Slice(UInt8) type as the second arg in IDA, it assumes that `size` and `read_only` get passed in the same register which breaks decompilation outputs. One way to circumvent this is by using __usercall and manually specifying the registers used in the slice param, but that's a lot of manual work and the function prototype ends up looking super ugly.
+
+The solution? Creating a custom calling convention. When you set the `__crystal` calling convention on a function, it'll emulate how __fastcall works, but if it ever encounters a user defined type (udt), it'll extract all the members and let them have their own registers/stack space.
+
+<video src="./media/set_cc.mp4" controls="controls" title="Demo Setting Custom Calling Convention"></video>
+
 ## Showcase
 
 <table>
