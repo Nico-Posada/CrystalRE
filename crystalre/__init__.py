@@ -6,3 +6,4 @@ from .string_utils import find_and_define_strings, StringCommenter, ReturnTypeCo
 from .functions import fix_function_data, set_function_names
 from .cr_funcs import apply_known_functions
 from .cr_cc import register_cc, unregister_cc
+from .actions import register_type_action, unregister_type_action, register_set_cc, unregister_set_cc

@@ -100,14 +100,14 @@ def set_function_types():
         if return_type in ("Nil", "NoReturn"):
             ret_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
         else:
-            ret_tif = name_to_tif(return_type)
+            ret_tif = name_to_tif(return_type, True)
             if ret_tif is None:
                 continue
 
         # try to get tifs for all args - bail if any fail
         arg_tifs = []
         for i, arg_type in enumerate(args):
-            arg_tif = name_to_tif(arg_type)
+            arg_tif = name_to_tif(arg_type, True)
             if arg_tif is None:
                 # edge case: allow unknown self type
                 if i == 0 and should_add_self:

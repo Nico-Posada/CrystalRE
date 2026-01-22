@@ -73,8 +73,9 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
                 fti.retloc.set_reg1(self._get_reg_id("rax"))
                 # log(f"[CrystalCC]   single reg: rax")
         else:
-            # simple type - check size for large types like UInt128
+            # simple type. largest builtin type is UInt128 so hopefully nothing bad comes from this
             ret_size = fti.rettype.get_size()
+            assert ret_size <= 16
             if ret_size > 8:
                 # split across rax:rdx like __fastcall
                 fti.retloc.set_reg2(self._get_reg_id("rax"), self._get_reg_id("rdx"))

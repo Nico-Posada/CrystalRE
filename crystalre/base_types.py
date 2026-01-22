@@ -44,6 +44,15 @@ def should_type_be_ptr(type_name: str):
     return (type_name == "String" or type_name not in CR_BASE_TYPES) and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
     # return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
 
+def _get_expected_tif(ida_type_name: str):
+    tif = ida_typeinf.tinfo_t()
+    if tif.get_named_type(None, ida_type_name):
+        return tif
+    # try parsing as a type string for built-in types
+    if ida_typeinf.parse_decl(tif, None, f"{ida_type_name};", ida_typeinf.PT_SIL):
+        return tif
+    return None
+
 _TYPE_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.tinfo_t]]]] = []
 def _register_handler(*signatures: str):
     global _TYPE_HANDLERS
@@ -51,7 +60,7 @@ def _register_handler(*signatures: str):
     def wrapper(func):
         nonlocal signatures
         _TYPE_HANDLERS.extend((
-            tuple(signature.split("...")),
+            tuple(signature.split("...", maxsplit=1)),
             func
         ) for signature in signatures)
         return staticmethod(func)
@@ -59,8 +68,13 @@ def _register_handler(*signatures: str):
 
 class BuiltinTypeHandler:
     @staticmethod
-    def name_to_tif(type_name: str) -> Optional[ida_typeinf.tinfo_t]:
+    def name_to_tif(type_name: str, assume_ptrs: bool) -> Optional[ida_typeinf.tinfo_t]:
         global _TYPE_HANDLERS
+        
+        type_name = type_name.strip()
+        
+        # the "Set Crystal Type" UI option allows users to input data now, and people would rather
+        # end types with * instead of wrapping the type in `Pointer`, so normalize the behavior
         
         # edge case for `&Proc`, it should just be treated as `Proc`
         if type_name.startswith("&Proc"):
@@ -68,19 +82,19 @@ class BuiltinTypeHandler:
         
         tif = ida_typeinf.tinfo_t()
         if tif.get_named_type(None, type_name):
-            if should_type_be_ptr(type_name):
+            if assume_ptrs and should_type_be_ptr(type_name):
                 tif.create_ptr(tif)
             return tif
         
         for (lhs, rhs), handler in _TYPE_HANDLERS:
             if type_name.startswith(lhs) and type_name.endswith(rhs):
-                return handler(type_name[len(lhs):-len(rhs)])
+                return handler(type_name[len(lhs):-len(rhs)], assume_ptrs)
         
         return None
     
     @_register_handler("Pointer(...)")
-    def handle_pointer(type_name: str):
-        tif = BuiltinTypeHandler.name_to_tif(type_name)
+    def handle_pointer(type_name: str, assume_ptrs: bool):
+        tif = BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
         if tif is not None:
             tif.create_ptr(tif)
             return tif
@@ -93,7 +107,7 @@ class BuiltinTypeHandler:
         return None
     
     @_register_handler("Array(...)")
-    def handle_array(type_name: str):
+    def handle_array(type_name: str, assume_ptrs: bool):
         """
         struct Array(xxx) {
             UInt32 type_id;
@@ -104,7 +118,7 @@ class BuiltinTypeHandler:
         };
         """
 
-        buffer_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        buffer_tif = BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
         if buffer_tif is None:
             # set it to void as a fallback if it's an unknown type
             buffer_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
@@ -147,14 +161,14 @@ class BuiltinTypeHandler:
         tif.set_named_type(None, array_type_name)
 
         # make it a pointer (Arrays are passed by reference)
-        if not tif.create_ptr(tif):
+        if assume_ptrs and not tif.create_ptr(tif):
             warning(f"Failed to create ptr to Array struct for {type_name!r}")
             return None
 
         return tif
     
     @_register_handler("Slice(...)")
-    def handle_slice(type_name: str):
+    def handle_slice(type_name: str, assume_ptrs: bool):
         """
         struct Slice(xxx) {
             Int32 size;
@@ -163,7 +177,7 @@ class BuiltinTypeHandler:
         };
         """
 
-        pointer_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        pointer_tif = BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
         if pointer_tif is None:
             # set it to void as a fallback if it's an unknown type
             pointer_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
@@ -206,12 +220,12 @@ class BuiltinTypeHandler:
         # don't make it a pointer, Slices are passed by value
         return tif
     
-    # @_register_handler("(...)")
-    def handle_union(type_name: str):
+    # @_register_handler("(...)", "Union(...)")
+    def handle_union(type_name: str, assume_ptrs: bool):
         return None
     
     @_register_handler("Proc(...)")
-    def handle_proc(type_name: str):
+    def handle_proc(type_name: str, assume_ptrs: bool):
         """
         struct Proc(...) {
             void* function;
@@ -250,14 +264,14 @@ class BuiltinTypeHandler:
         return tif
     
     @_register_handler("Atomic(...)")
-    def handle_atomic(type_name: str):
+    def handle_atomic(type_name: str, assume_ptrs: bool):
         """
         struct Atomic(...) {
             ... value;
         }
         """
 
-        value_tif = BuiltinTypeHandler.name_to_tif(type_name)
+        value_tif = BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
         if value_tif is None:
             # set it to void* as a fallback if it's an unknown type
             value_tif = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PVOID)
@@ -284,23 +298,14 @@ class BuiltinTypeHandler:
         return tif
     
     @_register_handler("....class")
-    def handle_class(type_name: str):
+    def handle_class(type_name: str, assume_ptrs: bool):
         # .class types are just UInt32's lol
         tif = ida_typeinf.tinfo_t()
         tif.get_named_type(None, "UInt32")
         return tif
 
-def name_to_tif(type_name: str):
-    return BuiltinTypeHandler.name_to_tif(type_name)
-
-def _get_expected_tif(ida_type_name: str):
-    tif = ida_typeinf.tinfo_t()
-    if tif.get_named_type(None, ida_type_name):
-        return tif
-    # try parsing as a type string for built-in types
-    if ida_typeinf.parse_decl(tif, None, f"{ida_type_name};", ida_typeinf.PT_SIL):
-        return tif
-    return None
+def name_to_tif(type_name: str, assume_ptrs: bool):
+    return BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
 
 def _types_match(existing_tif: ida_typeinf.tinfo_t, expected_ida_name: str):
     expected_tif = _get_expected_tif(expected_ida_name)

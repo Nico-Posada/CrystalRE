@@ -48,6 +48,8 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.naming_hook = None
         self.string_hook = None
         self.rettype_hook = None
+        self.settype_hook = None
+        self.set_cc_hook = None
         self.initalized_cache = False
         log("Plugin CrystalRE initializing")
         addon = ida_kernwin.addon_info_t()
@@ -87,6 +89,12 @@ class CrystalRE(ida_idaapi.plugin_t):
             log(f"CrystalCC registered with ID: {cc_id:#x}")
         else:
             warning("Failed to register CrystalCC")
+
+        # register crystal type setter action (shift+y)
+        self.settype_hook = register_type_action()
+
+        # register force crystal cc action (shift+c)
+        self.set_cc_hook = register_set_cc()
 
         binary_path = ida_nalt.get_input_file_path()
 
@@ -141,11 +149,16 @@ class CrystalRE(ida_idaapi.plugin_t):
         self.naming_hook and self.naming_hook.unhook()
         self.string_hook and self.string_hook.unhook()
         self.rettype_hook and self.rettype_hook.unhook()
+
         unregister_cc()
+        unregister_type_action(self.settype_hook)
+        unregister_set_cc(self.set_cc_hook)
 
         self.naming_hook = None
         self.string_hook = None
         self.rettype_hook = None
+        self.settype_hook = None
+        self.set_cc_hook = None
         self.initialized = False
 
 def PLUGIN_ENTRY():
