@@ -69,7 +69,7 @@ So if you set the Slice(UInt8) type as the second arg in IDA, it assumes that `s
 
 The solution? Creating a custom calling convention. When you set the `__crystal` calling convention on a function, it'll emulate how __fastcall works, but if it ever encounters a user defined type (udt), it'll extract all the members and let them have their own registers/stack space.
 
-<video src="./media/set_cc.mp4" controls="controls" title="Demo Setting Custom Calling Convention"></video>
+![Showcase Setting Custom Calling Convention](media/set_cc.gif)
 
 ## Showcase
 
