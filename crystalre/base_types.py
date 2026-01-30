@@ -347,6 +347,47 @@ class BuiltinTypeHandler:
         udt = _udt_from_fields(fields)
         return _udt_to_named_tif(udt, f"Hash({type_name})", assume_ptrs)
     
+    @_register_handler("Range(...)")
+    def handle_range(type_name: str, assume_ptrs: bool):
+        """
+        struct Range(B, E) {
+            B begin;
+            E end;
+            Bool exclusive;
+        }
+        """
+        
+        args = split_true_commas(type_name)
+        if len(args) != 2:
+            warning(f"Got {len(args)} args when splitting Range({type_name})")
+            return None
+        
+        begin, end = args
+        use_begin = begin != "Nil"
+        use_end = end != "Nil"
+
+        if use_begin:
+            begin_tif = name_to_tif(begin, False)
+            if not begin_tif:
+                warning(f"Failed to get tif for {begin!r} when parsing Range")
+                return None
+
+        if use_end:
+            end_tif = name_to_tif(end, False)
+            if not end_tif:
+                warning(f"Failed to get tif for {end!r} when parsing Range")
+                return None
+        
+        fields = []
+        if use_begin:
+            fields.append(("begin", begin_tif))
+        if use_end:
+            fields.append(("end", end_tif))
+        fields.append(("exclusive", "Bool"))
+
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Range({type_name})", False)
+    
     @_register_handler("....class")
     def handle_class(type_name: str, assume_ptrs: bool):
         # .class types are just UInt32's lol
