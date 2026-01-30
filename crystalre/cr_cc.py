@@ -3,10 +3,13 @@
 import ida_typeinf
 import ida_idp
 
-from .log import log
+from .log import log, warning
 
 # argument registers for x86_64
 ARG_REGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+# floating-point argument registers
+XMM_REGS = ["xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7",
+            "xmm8", "xmm9", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15"]
 # struct return registers
 SRET_REGS = ["rax", "rdx", "rcx", "r8"]
 
@@ -35,26 +38,32 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
             fields.append((offset, size))
         return fields
 
+    def _is_float_type(self, tif: ida_typeinf.tinfo_t) -> bool:
+        # check if type is floating-point (float, double, long double)
+        return tif.is_floating()
+
     def validate_func(self, fti: ida_typeinf.func_type_data_t):
         # return True to accept, or a string with error message to reject
-        # log(f"[CrystalCC] validate_func called")
         return True
 
     def calc_retloc(self, fti: ida_typeinf.func_type_data_t) -> bool:
-        ret_str = str(fti.rettype)
-
         if fti.rettype.is_void():
-            # log(f"[CrystalCC] calc_retloc: void")
+            return True
+
+        # floating-point returns use xmm0
+        if self._is_float_type(fti.rettype):
+            fti.retloc.set_reg1(self._get_reg_id("xmm0"))
             return True
 
         if fti.rettype.is_udt():
             fields = self._get_struct_fields(fti.rettype)
-            # log(f"[CrystalCC] calc_retloc: struct {ret_str} with {len(fields)} fields")
 
-            if len(fields) > 1 and len(fields) <= len(SRET_REGS):
+            if len(fields) == 0:
+                warning(f"Could not get fields for return type {fti.rettype}, using rax")
+                fti.retloc.set_reg1(self._get_reg_id("rax"))
+            elif len(fields) > 1 and len(fields) <= len(SRET_REGS):
                 # split struct return into separate registers
                 scattered = ida_typeinf.scattered_aloc_t()
-                # field_regs = []
 
                 for i, (offset, size) in enumerate(fields):
                     part = ida_typeinf.argpart_t()
@@ -62,114 +71,139 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
                     part.size = size
                     part.set_reg1(self._get_reg_id(SRET_REGS[i]))
                     scattered.push_back(part)
-                    # field_regs.append(f"off={offset}:sz={size}->{SRET_REGS[i]}")
 
                 fti.retloc.consume_scattered(scattered)
                 total_size = fti.rettype.get_size()
                 ida_typeinf.optimize_argloc(fti.retloc, total_size, None)
-                # log(f"[CrystalCC]   split: [{', '.join(field_regs)}]")
             else:
                 # single field struct or too many fields, use rax
+                if len(fields) > len(SRET_REGS):
+                    warning(f"Return struct has {len(fields)} fields (max {len(SRET_REGS)}), using rax only")
                 fti.retloc.set_reg1(self._get_reg_id("rax"))
-                # log(f"[CrystalCC]   single reg: rax")
         else:
             # simple type. largest builtin type is UInt128 so hopefully nothing bad comes from this
             ret_size = fti.rettype.get_size()
-            assert ret_size <= 16
-            if ret_size > 8:
+            if ret_size > 16:
+                warning(f"Non-UDT return type {fti.rettype} is {ret_size} bytes (>16), using rax")
+                fti.retloc.set_reg1(self._get_reg_id("rax"))
+            elif ret_size > 8:
                 # split across rax:rdx like __fastcall
                 fti.retloc.set_reg2(self._get_reg_id("rax"), self._get_reg_id("rdx"))
-                # log(f"[CrystalCC] calc_retloc: {ret_str} ({ret_size} bytes) -> rax:rdx")
             else:
                 fti.retloc.set_reg1(self._get_reg_id("rax"))
-                # log(f"[CrystalCC] calc_retloc: {ret_str} -> rax")
 
         return True
 
     def _use_fastcall(self, fti: ida_typeinf.func_type_data_t) -> bool:
         # delegate to __fastcall for cases we can't handle
-        # log(f"[CrystalCC] falling back to __fastcall")
+        warning(f"Falling back to __fastcall")
         fti.set_cc(ida_typeinf.CM_CC_FASTCALL)
         return True
 
     def calc_arglocs(self, fti: ida_typeinf.func_type_data_t) -> bool:
         # log(f"[CrystalCC] calc_arglocs called with {fti.size()} args")
-        reg_idx = 0
+        reg_idx = 0  # general-purpose register index
+        xmm_idx = 0  # floating-point register index
         stk_off = 0
 
         for i in range(fti.size()):
             fa = fti[i]
-            arg_type_str = str(fa.type)
             arg_size = fa.type.get_size()
 
-            # check if we've run out of registers
+            # floating-point arguments use XMM registers
+            if self._is_float_type(fa.type):
+                if xmm_idx < len(XMM_REGS):
+                    fa.argloc.set_reg1(self._get_reg_id(XMM_REGS[xmm_idx]))
+                    xmm_idx += 1
+                else:
+                    # no xmm registers left, use stack
+                    fa.argloc.set_stkoff(stk_off)
+                    stk_off += (arg_size + 7) & ~7
+                continue
+
+            # check if we've run out of gp registers
             if reg_idx >= len(ARG_REGS):
                 # allocate on stack
                 fa.argloc.set_stkoff(stk_off)
                 stk_off += (arg_size + 7) & ~7  # align to 8 bytes
-                # log(f"[CrystalCC]   arg {i}: {arg_type_str} -> stack[{fa.argloc.stkoff()}]")
                 continue
 
             if fa.type.is_udt():
                 fields = self._get_struct_fields(fa.type)
-                # log(f"[CrystalCC]   arg {i}: struct {arg_type_str} with {len(fields)} fields")
+                regs_available = len(ARG_REGS) - reg_idx
 
-                # TODO: if the struct overlaps the end of the arg regs and the start of the
-                # stack regs we need to be able to handle that
-                if len(fields) > 1 and reg_idx + len(fields) <= len(ARG_REGS):
-                    # split struct into separate registers
+                if len(fields) > 1 and regs_available >= len(fields):
+                    # all fields fit in registers
                     scattered = ida_typeinf.scattered_aloc_t()
-                    field_regs = []
-
                     for offset, size in fields:
                         part = ida_typeinf.argpart_t()
                         part.off = offset
                         part.size = size
                         part.set_reg1(self._get_reg_id(ARG_REGS[reg_idx]))
                         scattered.push_back(part)
-                        # field_regs.append(f"off={offset}:sz={size}->{ARG_REGS[reg_idx]}")
                         reg_idx += 1
 
                     fa.argloc.consume_scattered(scattered)
                     total_size = fa.type.get_size()
                     ida_typeinf.optimize_argloc(fa.argloc, total_size, None)
-                    # log(f"[CrystalCC]     split: [{', '.join(field_regs)}]")
+                elif len(fields) > 1 and regs_available > 0:
+                    # struct spans registers and stack - split it
+                    scattered = ida_typeinf.scattered_aloc_t()
+                    for idx, (offset, size) in enumerate(fields):
+                        part = ida_typeinf.argpart_t()
+                        part.off = offset
+                        part.size = size
+
+                        if idx < regs_available:
+                            # field goes in register
+                            part.set_reg1(self._get_reg_id(ARG_REGS[reg_idx]))
+                            reg_idx += 1
+                        else:
+                            # field goes on stack
+                            part.set_stkoff(stk_off)
+                            stk_off += (size + 7) & ~7
+
+                        scattered.push_back(part)
+
+                    fa.argloc.consume_scattered(scattered)
+                    total_size = fa.type.get_size()
+                    ida_typeinf.optimize_argloc(fa.argloc, total_size, None)
                 elif reg_idx < len(ARG_REGS):
                     # single field struct or not enough regs for split, use one register
                     fa.argloc.set_reg1(self._get_reg_id(ARG_REGS[reg_idx]))
-                    # log(f"[CrystalCC]     single reg: {ARG_REGS[reg_idx]}")
                     reg_idx += 1
                 else:
                     # no registers left, use stack
                     fa.argloc.set_stkoff(stk_off)
                     stk_off += (arg_size + 7) & ~7
-                    # log(f"[CrystalCC]     stack: [{fa.argloc.stkoff()}]")
             else:
                 # simple type - check size for large types like UInt128
                 if arg_size > 8:
                     # need two registers
                     if reg_idx + 1 < len(ARG_REGS):
                         fa.argloc.set_reg2(self._get_reg_id(ARG_REGS[reg_idx]), self._get_reg_id(ARG_REGS[reg_idx + 1]))
-                        # log(f"[CrystalCC]   arg {i}: {arg_type_str} ({arg_size} bytes) -> {ARG_REGS[reg_idx]}:{ARG_REGS[reg_idx + 1]}")
                         reg_idx += 2
                     else:
                         # not enough registers, use stack
                         fa.argloc.set_stkoff(stk_off)
                         stk_off += (arg_size + 7) & ~7
-                        # log(f"[CrystalCC]   arg {i}: {arg_type_str} ({arg_size} bytes) -> stack[{fa.argloc.stkoff()}]")
                 else:
                     fa.argloc.set_reg1(self._get_reg_id(ARG_REGS[reg_idx]))
-                    # log(f"[CrystalCC]   arg {i}: {arg_type_str} -> {ARG_REGS[reg_idx]}")
                     reg_idx += 1
 
         fti.stkargs = stk_off
         return self.calc_retloc(fti)
 
     def get_cc_regs(self, callregs: ida_typeinf.callregs_t) -> bool:
-        # log(f"[CrystalCC] get_cc_regs called")
-        callregs.nregs = len(ARG_REGS)
+        # register general-purpose registers
         for reg in ARG_REGS:
             callregs.gpregs.push_back(self._get_reg_id(reg))
+
+        # register floating-point registers
+        for reg in XMM_REGS:
+            callregs.fpregs.push_back(self._get_reg_id(reg))
+
+        callregs.nregs = len(ARG_REGS) + len(XMM_REGS)
         return True
 
 

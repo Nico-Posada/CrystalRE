@@ -353,8 +353,8 @@ class SymbolCache:
                 helper_info = {
                     'name': sym.name,
                     'args': [],
-                    # init funcs are void, const_read/read return the object in the function name
-                    'return_type': "Nil" if sym.name.endswith("init") else sym.name[1:].rpartition(":")[0] or "Nil"
+                    # init funcs are void, const_read/read return the object in the function name, but we don't know the type so guess Void*
+                    'return_type': "Nil" if sym.name.endswith("init") else "Pointer(Void)"
                 }
                 
                 parsed_symbol = ParsedSymbol(
@@ -446,7 +446,8 @@ if __name__ == "__main__":
     # display parsed symbols
     for rva, parsed_sym in symbols.items():
         # if "match" not in parsed_sym.orig_name: continue
-        if parsed_sym.symbol_data.get("class_method?", False) and "metaclass" in parsed_sym.symbol_data:
+        # if parsed_sym.symbol_data.get("class_method?", False) and "metaclass" in parsed_sym.symbol_data:
+        if "Hash" in parsed_sym.orig_name and "new" in parsed_sym.orig_name:
             print(f"RVA: {rva:#x}")
             print(f"  Type: {parsed_sym.symbol_type.name}")
             print(f"  Original: {parsed_sym.orig_name}")

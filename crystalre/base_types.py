@@ -32,7 +32,18 @@ _TYPE_CONVERSIONS = {
 }
 
 CR_BASE_TYPES = [v for (v, _) in _TYPE_CONVERSIONS if v != "char32_t"]
-NO_POINTER_TYPES = ["Slice", "Union", "Tuple", "NamedTuple", "Range", "Proc", "Atomic"]
+
+# these are builtin "struct" types
+NO_POINTER_TYPES = (
+    "Slice",
+    "Union",
+    "Tuple",
+    "NamedTuple",
+    "Range",
+    "Proc",
+    "Atomic",
+    "Hash::Entry"
+)
 
 def _type_exists(name: str):
     return ida_typeinf.tinfo_t().get_named_type(None, name)
@@ -52,6 +63,41 @@ def _get_expected_tif(ida_type_name: str):
     if ida_typeinf.parse_decl(tif, None, f"{ida_type_name};", ida_typeinf.PT_SIL):
         return tif
     return None
+
+def _make_member(field_name: str, field_type: str | ida_typeinf.tinfo_t):
+    assert isinstance(field_type, (str, ida_typeinf.tinfo_t)), f"Got {type(field_type) = !r}"
+    udt_member = ida_typeinf.udt_member_t()
+    udt_member.name = field_name
+    if isinstance(field_type, str):
+        udt_member.type = ida_typeinf.tinfo_t()
+        udt_member.type.get_named_type(None, field_type)
+    else:
+        udt_member.type = field_type
+    return udt_member
+
+def _udt_to_named_tif(udt: ida_typeinf.udt_type_data_t, name: str, make_ptr: bool):
+    # create tinfo_t from udt
+    tif = ida_typeinf.tinfo_t()
+    if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
+        warning(f"Failed to create struct for {name!r}")
+        return None
+
+    # set named type so it's not anonymous
+    tif.set_named_type(None, name)
+
+    # make it a pointer if needed
+    if make_ptr and not tif.create_ptr(tif):
+        warning(f"Failed to create ptr for {name!r}")
+        return None
+
+    return tif
+
+def _udt_from_fields(fields: list[tuple[str, str | ida_typeinf.tinfo_t]]):
+    udt = ida_typeinf.udt_type_data_t()
+    for field_name, field_type in fields:
+        udt.push_back(_make_member(field_name, field_type))
+    
+    return udt
 
 _TYPE_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.tinfo_t]]]] = []
 def _register_handler(*signatures: str):
@@ -118,7 +164,7 @@ class BuiltinTypeHandler:
         };
         """
 
-        buffer_tif = BuiltinTypeHandler.name_to_tif(type_name, assume_ptrs)
+        buffer_tif = BuiltinTypeHandler.name_to_tif(type_name, True)
         if buffer_tif is None:
             # set it to void as a fallback if it's an unknown type
             buffer_tif = ida_typeinf.tinfo_t(ida_typeinf.BTF_VOID)
@@ -127,45 +173,17 @@ class BuiltinTypeHandler:
             warning(f"Failed to create ptr out of tif for {type_name!r}")
             return None
 
-        udt = ida_typeinf.udt_type_data_t()
-
-        # add hardcoded fields
+        # add fields
         fields = [
             ("type_id", "UInt32"),
             ("size", "Int32"),
             ("capacity", "Int32"),
             ("offset_to_buffer", "Int32"),
+            ("buffer", buffer_tif)
         ]
 
-        for field_name, field_type in fields:
-            udt_member = ida_typeinf.udt_member_t()
-            udt_member.name = field_name
-            udt_member.type = ida_typeinf.tinfo_t()
-            udt_member.type.get_named_type(None, field_type)
-            udt.push_back(udt_member)
-
-        # add buffer field (xxx*)
-        udt_member = ida_typeinf.udt_member_t()
-        udt_member.name = "buffer"
-        udt_member.type = buffer_tif
-        udt.push_back(udt_member)
-
-        # create tinfo_t from udt
-        tif = ida_typeinf.tinfo_t()
-        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
-            warning(f"Failed to create Array struct for {type_name!r}")
-            return None
-
-        # set named type so it's not anonymous
-        array_type_name = f"Array({type_name})"
-        tif.set_named_type(None, array_type_name)
-
-        # make it a pointer (Arrays are passed by reference)
-        if assume_ptrs and not tif.create_ptr(tif):
-            warning(f"Failed to create ptr to Array struct for {type_name!r}")
-            return None
-
-        return tif
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Array({type_name})", assume_ptrs)
     
     @_register_handler("Slice(...)")
     def handle_slice(type_name: str, assume_ptrs: bool):
@@ -186,39 +204,15 @@ class BuiltinTypeHandler:
             warning(f"Failed to create ptr out of tif for {type_name!r}")
             return None
 
-        udt = ida_typeinf.udt_type_data_t()
-
-        # add hardcoded fields
+        # add fields
         fields = [
             ("size", "Int32"),
             ("read_only", "Bool"),
+            ("pointer", pointer_tif)
         ]
 
-        for field_name, field_type in fields:
-            udt_member = ida_typeinf.udt_member_t()
-            udt_member.name = field_name
-            udt_member.type = ida_typeinf.tinfo_t()
-            udt_member.type.get_named_type(None, field_type)
-            udt.push_back(udt_member)
-
-        # add pointer field (xxx*)
-        udt_member = ida_typeinf.udt_member_t()
-        udt_member.name = "pointer"
-        udt_member.type = pointer_tif
-        udt.push_back(udt_member)
-
-        # create tinfo_t from udt
-        tif = ida_typeinf.tinfo_t()
-        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
-            warning(f"Failed to create Slice struct for {type_name!r}")
-            return None
-
-        # set named type so it's not anonymous
-        slice_type_name = f"Slice({type_name})"
-        tif.set_named_type(None, slice_type_name)
-
-        # don't make it a pointer, Slices are passed by value
-        return tif
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Slice({type_name})", False)
     
     # @_register_handler("(...)", "Union(...)")
     def handle_union(type_name: str, assume_ptrs: bool):
@@ -236,32 +230,14 @@ class BuiltinTypeHandler:
         # create void* type for both fields
         void_ptr = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PVOID)
 
-        udt = ida_typeinf.udt_type_data_t()
+        # add fields
+        fields = [
+            ("function", void_ptr),
+            ("closure", void_ptr)
+        ]
 
-        # add function field (void*)
-        udt_member = ida_typeinf.udt_member_t()
-        udt_member.name = "function"
-        udt_member.type = void_ptr
-        udt.push_back(udt_member)
-
-        # add closure field (void*)
-        udt_member = ida_typeinf.udt_member_t()
-        udt_member.name = "closure"
-        udt_member.type = void_ptr
-        udt.push_back(udt_member)
-
-        # create tinfo_t from udt
-        tif = ida_typeinf.tinfo_t()
-        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
-            warning(f"Failed to create Proc struct for {type_name!r}")
-            return None
-
-        # set named type so it's not anonymous
-        proc_type_name = f"Proc({type_name})"
-        tif.set_named_type(None, proc_type_name)
-
-        # don't make it a pointer, Procs are passed by value (16 bytes)
-        return tif
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Proc({type_name})", False)
     
     @_register_handler("Atomic(...)")
     def handle_atomic(type_name: str, assume_ptrs: bool):
@@ -276,26 +252,100 @@ class BuiltinTypeHandler:
             # set it to void* as a fallback if it's an unknown type
             value_tif = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PVOID)
 
-        udt = ida_typeinf.udt_type_data_t()
-
-        # add value field
-        udt_member = ida_typeinf.udt_member_t()
-        udt_member.name = "value"
-        udt_member.type = value_tif
-        udt.push_back(udt_member)
-
-        # create tinfo_t from udt
-        tif = ida_typeinf.tinfo_t()
-        if not tif.create_udt(udt, ida_typeinf.BTF_STRUCT):
-            warning(f"Failed to create Atomic struct for {type_name!r}")
+        udt = _udt_from_fields([("value", value_tif)])
+        return _udt_to_named_tif(udt, f"Atomic({type_name})", False)
+    
+    @_register_handler("Hash::Entry(...)")
+    def handle_hash_entry(type_name: str, assume_ptrs: bool):
+        """
+        struct Hash::Entry(K, V) {
+            UInt32 hash;
+            K key;
+            V value;
+        }
+        """
+        args = split_true_commas(type_name)
+        if len(args) != 2:
+            warning(f"Got {len(args)} args when parsing Hash::Entry({type_name})")
             return None
 
-        # set named type so it's not anonymous
-        atomic_type_name = f"Atomic({type_name})"
-        tif.set_named_type(None, atomic_type_name)
+        key, value = args
+        use_key = key != "Nil"
+        use_value = value != "Nil"
 
-        # don't make it a pointer, Atomics are passed by value
-        return tif
+        # both key and value must return tifs for us to make the type
+        if use_key:
+            key_tif = name_to_tif(key, True)
+            if key_tif is None:
+                return None
+        
+        if use_value:
+            value_tif = name_to_tif(value, True)
+            if value_tif is None:
+                return None
+
+        fields = [
+            ("hash", "UInt32"),
+        ]
+        
+        if use_key:
+            fields.append(("key", key_tif))
+        if use_value:
+            fields.append(("value", value_tif))
+        
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Hash::Entry({type_name})", False)
+    
+    @_register_handler("Hash(...)")
+    def handle_hash(type_name: str, assume_ptrs: bool):
+        """
+        struct Hash(K, V) {
+            UInt32 type_id;
+            Int32 first;
+            Hash::Entry(K, V) *entries;
+            UInt8 *indices;
+            Int32 size;
+            Int32 deleted_count;
+            Int8 indices_bytesize;
+            UInt8 indices_size_pow2;
+            Bool compare_by_identity;
+            void *block_ptr;
+            void *block_data;
+        }
+        """
+        
+        void_ptr = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PVOID)
+
+        entries_tif = name_to_tif(f"Hash::Entry({type_name})", True)
+        if entries_tif is None:
+            # its safe to use void* here, this isn't that relevant for the type
+            entries_tif = void_ptr
+        else:
+            if not entries_tif.create_ptr(entries_tif):
+                warning(f"Failed to create ptr for {type_name!r}")
+                return None
+        
+        if not (p_uint8 := name_to_tif("UInt8", False)) or \
+            not p_uint8.create_ptr(p_uint8):
+            warning(f"Failed to get UInt8* type")
+            return None
+        
+        fields = [
+            ("type_id", "UInt32"),
+            ("first", "Int32"),
+            ("entries", entries_tif),
+            ("indices", p_uint8),
+            ("size", "Int32"),
+            ("deleted_count", "Int32"),
+            ("indices_bytesize", "Int8"),
+            ("indices_size_pow2", "UInt8"),
+            ("compare_by_identity", "Bool"),
+            ("block_ptr", void_ptr),
+            ("block_data", void_ptr),
+        ]
+        
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Hash({type_name})", assume_ptrs)
     
     @_register_handler("....class")
     def handle_class(type_name: str, assume_ptrs: bool):

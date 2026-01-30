@@ -183,7 +183,6 @@ The plugin stores its state in the IDA database, so it won't re-run on subsequen
 
 - If a binary has dwarf symbols and you load it with default options, every unhandled function will be of type `int __cdecl ()` and it ruins decompilations. This is an issue with crystal itself and not the plugin. The only way to fix this is to uncheck `Apply calling conventions` and `Function prototypes are definitive` when the _DWARF info_ pop-up appears.
 - If a `Proc` contains a closure, the crytsal codegen will inject the closure as the first arg. There's no way of knowing if this closure parameter has been injected from the symbol name alone, so we just assume all procs don't have closures. If you're analyzing a proc and the decomp look messed up, it's probably because the closure is the real first arg.
-- Some functions return structs via multiple registers, these do not decompile well and require manual intervention (for now)
 
 ## Limitations
 

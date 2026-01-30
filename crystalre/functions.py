@@ -12,7 +12,8 @@ from .log import log, info, warning, debug
 from .cr_cc import get_cc_id
 
 import re
-GENERIC_METACLASS_PAT = re.compile(r"\bT\b")
+# ex: Array(T), Hash::Entry(K, V)
+GENERIC_METACLASS_PAT = re.compile(r"\b[TK]\b")
 
 def set_function_names():
     # get all parsed symbols
