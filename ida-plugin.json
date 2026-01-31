@@ -3,11 +3,13 @@
     "plugin": {
         "name": "CrystalRE",
         "entryPoint": "crystalre.py",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "idaVersions": ">=9.0",
         "description": "Make reversing crystal binaries less annoying.",
         "license": "MIT",
         "categories": [
+            "API-scripting-and-automation",
+            "decompilation",
             "file-parsers-and-loaders"
         ],
         "keywords": [

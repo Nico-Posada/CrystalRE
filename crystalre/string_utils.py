@@ -104,6 +104,8 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
     def __init__(self, cfunc):
         super().__init__(ida_hexrays.CV_FAST)
         self.cfunc = cfunc
+        # collect comments to combine multiple strings at the same location
+        self.comments = {}  # {(ea, itp): [comment1, comment2, ...]}
 
     # based on https://github.com/KasperskyLab/hrtng/blob/v3.7.74/src/rename.cpp#L982
     def visit_expr(self, expr):
@@ -123,12 +125,12 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
                         try:
                             decoded = str_data.decode('utf-8')
 
-                            # create treeloc for comment placement
+                            # determine comment location
                             loc = ida_hexrays.treeloc_t()
                             loc.ea = expr.ea
                             loc.itp = ida_hexrays.ITP_SEMI
 
-                            # find parent statement for better placement
+                            # find parent statement for valid ea
                             p = self.cfunc.body.find_parent_of(expr)
                             while p and p.op <= ida_hexrays.cot_last:
                                 p = self.cfunc.body.find_parent_of(p)
@@ -141,12 +143,25 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
                                 elif p.op == ida_hexrays.cit_if:
                                     loc.itp = ida_hexrays.ITP_BRACE2
 
-                            # set comment directly
-                            self.cfunc.set_user_cmt(loc, f'"{decoded}"')
+                            # collect comment for this location
+                            key = (loc.ea, loc.itp)
+                            if key not in self.comments:
+                                self.comments[key] = []
+                            self.comments[key].append(f'"{decoded}"')
                         except (UnicodeDecodeError, AttributeError):
                             pass
 
         return 0
+
+    def apply_comments(self):
+        """apply all collected comments"""
+        for (ea, itp), comment_list in self.comments.items():
+            loc = ida_hexrays.treeloc_t()
+            loc.ea = ea
+            loc.itp = itp
+            # combine multiple comments with separator
+            combined = ", ".join(comment_list)
+            self.cfunc.set_user_cmt(loc, combined)
 
 
 class StringCommenter(ida_hexrays.Hexrays_Hooks):
@@ -160,9 +175,11 @@ class StringCommenter(ida_hexrays.Hexrays_Hooks):
         if maturity != ida_hexrays.CMAT_FINAL:
             return 0
 
-        # traverse the ctree and add comments for String references
+        # traverse the ctree and collect String references
         visitor = StringRefVisitor(cfunc)
         visitor.apply_to(cfunc.body, None)
+        # apply all collected comments
+        visitor.apply_comments()
         return 0
 
 

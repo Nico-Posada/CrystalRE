@@ -266,7 +266,7 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
                     fa.argloc.set_stkoff(stk_off)
                     stk_off += (arg_size + 7) & ~7
             else:
-                # simple type - check size for large types like UInt128
+                # simple type. check size for large types like UInt128
                 if arg_size > 8:
                     # need two registers
                     if reg_idx + 1 < len(ARG_REGS):
