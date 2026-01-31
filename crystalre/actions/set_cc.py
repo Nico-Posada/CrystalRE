@@ -7,7 +7,6 @@ from ..cr_cc import get_cc_id
 
 ACTION_SET_CRYSTAL_CC = "crystalre:setcrystalcc"
 
-
 class SetCrystalCCAction(idaapi.action_handler_t):
     def __init__(self):
         idaapi.action_handler_t.__init__(self)
@@ -69,23 +68,14 @@ class SetCrystalCCAction(idaapi.action_handler_t):
             return 0
 
     def update(self, ctx):
-        # enable only in decompiler view when on function prototype
         vdui = idaapi.get_widget_vdui(ctx.widget)
-        if not vdui:
-            return idaapi.AST_DISABLE_FOR_WIDGET
-
-        # check if cursor is on function prototype
-        if vdui.item.citype == ida_hexrays.VDI_FUNC:
-            return idaapi.AST_ENABLE_FOR_WIDGET
-
-        return idaapi.AST_DISABLE_FOR_WIDGET
+        return idaapi.AST_ENABLE_FOR_WIDGET if vdui else idaapi.AST_DISABLE_FOR_WIDGET
 
 
 class SetCCPopupHook(ida_hexrays.Hexrays_Hooks):
     def populating_popup(self, widget, popup, vu):
-        # only attach if cursor is on function prototype
-        if vu.item.citype == ida_hexrays.VDI_FUNC:
-            idaapi.attach_action_to_popup(widget, popup, ACTION_SET_CRYSTAL_CC, None)
+        # always attach in decompiler view, let update() control enable/disable
+        idaapi.attach_action_to_popup(widget, popup, ACTION_SET_CRYSTAL_CC, None)
         return 0
 
 

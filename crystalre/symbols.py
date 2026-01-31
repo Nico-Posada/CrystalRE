@@ -115,6 +115,9 @@ def split_true_commas(string: str):
 def split_true_colons(string: str):
     return split_true_X(string, "::")
 
+def split_true_pipes(string: str):
+    return split_true_X(string, " | ")
+
 def parse_function(symbol_string):
     pattern = r"""
     (?(DEFINE)

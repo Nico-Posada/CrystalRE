@@ -5,7 +5,7 @@ import ida_typeinf
 import ida_ida
 
 from .log import log, warning
-from .symbols import split_true_commas
+from .symbols import split_true_commas, split_true_pipes
 from typing import Callable, Optional
 
 # All normal types
@@ -45,6 +45,13 @@ NO_POINTER_TYPES = (
     "Hash::Entry"
 )
 
+# Union(String | Nil) has the exact same runtime layout as String
+STRING_TYPES = {
+    "String",
+    "Union(String | Nil)",
+    "(String | Nil)"
+}
+
 def _type_exists(name: str):
     return ida_typeinf.tinfo_t().get_named_type(None, name)
 
@@ -52,7 +59,7 @@ def is_numeric_type(type_name: str):
     return type_name in CR_BASE_TYPES and type_name not in ("String", "Void")
 
 def should_type_be_ptr(type_name: str):
-    return (type_name == "String" or type_name not in CR_BASE_TYPES) and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
+    return type_name in STRING_TYPES or (type_name not in CR_BASE_TYPES and all(not type_name.startswith(s) for s in NO_POINTER_TYPES))
     # return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
 
 def _get_expected_tif(ida_type_name: str):
@@ -75,6 +82,14 @@ def _make_member(field_name: str, field_type: str | ida_typeinf.tinfo_t):
         udt_member.type = field_type
     return udt_member
 
+def _udt_from_fields(fields: list[tuple[str, str | ida_typeinf.tinfo_t]], is_union: bool = False):
+    udt = ida_typeinf.udt_type_data_t()
+    udt.is_union = is_union
+    for field_name, field_type in fields:
+        udt.push_back(_make_member(field_name, field_type))
+    
+    return udt
+
 def _udt_to_named_tif(udt: ida_typeinf.udt_type_data_t, name: str, make_ptr: bool):
     # create tinfo_t from udt
     tif = ida_typeinf.tinfo_t()
@@ -91,13 +106,6 @@ def _udt_to_named_tif(udt: ida_typeinf.udt_type_data_t, name: str, make_ptr: boo
         return None
 
     return tif
-
-def _udt_from_fields(fields: list[tuple[str, str | ida_typeinf.tinfo_t]]):
-    udt = ida_typeinf.udt_type_data_t()
-    for field_name, field_type in fields:
-        udt.push_back(_make_member(field_name, field_type))
-    
-    return udt
 
 _TYPE_HANDLERS: list[tuple[tuple[str, str], Callable[[str], Optional[ida_typeinf.tinfo_t]]]] = []
 def _register_handler(*signatures: str):
@@ -126,6 +134,10 @@ class BuiltinTypeHandler:
         if type_name.startswith("&Proc"):
             type_name = type_name[1:]
         
+        # Treat (...) as Union(...)
+        if type_name.startswith("(") and type_name.endswith(")"):
+            type_name = f"Union{type_name}"
+        
         tif = ida_typeinf.tinfo_t()
         if tif.get_named_type(None, type_name):
             if assume_ptrs and should_type_be_ptr(type_name):
@@ -147,10 +159,6 @@ class BuiltinTypeHandler:
         else:
             # default to _UNKNOWN *
             return ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PUNKNOWN)
-    
-    # @_register_handler("StaticArray(...)")
-    def handle_staticarray(type_name: str):
-        return None
     
     @_register_handler("Array(...)")
     def handle_array(type_name: str, assume_ptrs: bool):
@@ -387,6 +395,58 @@ class BuiltinTypeHandler:
 
         udt = _udt_from_fields(fields)
         return _udt_to_named_tif(udt, f"Range({type_name})", False)
+
+    @_register_handler("(...)", "Union(...)")
+    def handle_union(type_name: str, assume_ptrs: bool):
+        """
+        struct Union(...) {
+            UInt32 type_id;
+            union {
+                ...
+            }
+        }
+        """
+        
+        # epic edge case
+        if type_name == "String | Nil":
+            string_struct = """\
+            struct String
+            {
+                UInt32 type_id;
+                Int32 bytesize;
+                Int32 length;
+                UInt8 c[] __strlit(C,"UTF-8");
+            }
+            """
+
+            tif = ida_typeinf.tinfo_t(string_struct)
+            tif.set_named_type(None, "Union(String | Nil)")
+            return tif
+
+        args = split_true_pipes(type_name)
+        union_fields = []
+        for arg in args:
+            if arg == "Nil": continue
+            tif = name_to_tif(arg, True)
+            if tif:
+                clean_name = ida_name.validate_name(arg, ida_name.NT_LOCAL, ida_name.SN_IDBENC | ida_name.SN_NOCHECK)
+                union_fields.append((clean_name, tif))
+        
+        udt = _udt_from_fields(union_fields, is_union=True)
+        union_tif = ida_typeinf.tinfo_t()
+        if not union_tif.create_udt(udt, ida_typeinf.BTF_UNION):
+            warning(f"Failed to create union for ({type_name!s})")
+            return None
+        
+        # TODO: create an anonymous union and push all the args that evaluate properly
+        fields = [
+            ("type_id", "UInt32"),
+            ("u", union_tif)
+        ]
+        
+        udt = _udt_from_fields(fields)
+        return _udt_to_named_tif(udt, f"Union({type_name})", False)
+        
     
     @_register_handler("....class")
     def handle_class(type_name: str, assume_ptrs: bool):
@@ -429,8 +489,8 @@ def apply_crystal_base_types():
         flags = ida_typeinf.NTF_REPLACE if type_exists else 0
         tif.set_named_type(None, cr_name, flags)
     
-    if _type_exists("String"):
-        return
+    # Delete any form of the String struct that may exist
+    ida_typeinf.del_named_type(None, "String", ida_typeinf.NTF_TYPE)
 
     # create String struct.
     # `__strlit(C,"UTF-8")` makes it so defining global strings

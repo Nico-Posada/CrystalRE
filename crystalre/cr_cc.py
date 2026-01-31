@@ -23,11 +23,34 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
     def _get_reg_id(self, name: str) -> int:
         return ida_idp.str2reg(name)
 
+    def _split_union_into_chunks(self, udt: ida_typeinf.udt_type_data_t, base_offset: int = 0) -> list[tuple[int, int]]:
+        # find the largest member in the union
+        max_size = 0
+        for i in range(udt.size()):
+            member = udt[i]
+            member_size = member.size // 8
+            if member_size > max_size:
+                max_size = member_size
+
+        # split into 8-byte chunks
+        fields = []
+        offset = 0
+        while offset < max_size:
+            chunk_size = 8
+            fields.append((base_offset + offset, chunk_size))
+            offset += chunk_size
+        return fields
+
     def _get_struct_fields(self, tif: ida_typeinf.tinfo_t) -> list[tuple[int, int]]:
-        # returns list of (offset, size) for each field
+        # returns list of (offset, size) for each field, recursively flattening nested structs
+        # unions are split into 8-byte chunks based on largest member
         udt = ida_typeinf.udt_type_data_t()
         if not tif.get_udt_details(udt):
             return []
+
+        # if this is a union, split it into 8-byte chunks
+        if udt.is_union:
+            return self._split_union_into_chunks(udt, 0)
 
         fields = []
         for i in range(udt.size()):
@@ -35,7 +58,34 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
             # offset is in bits, convert to bytes
             offset = member.offset // 8
             size = member.size // 8
-            fields.append((offset, size))
+
+            # check if this member is itself a non-pointer UDT
+            member_type = member.type
+            if member_type.is_udt() and not member_type.is_ptr():
+                # check if it's a union or struct
+                nested_udt = ida_typeinf.udt_type_data_t()
+                if member_type.get_udt_details(nested_udt):
+                    if nested_udt.is_union:
+                        # union: split into 8-byte chunks based on largest member
+                        union_fields = self._split_union_into_chunks(nested_udt, offset)
+                        fields.extend(union_fields)
+                    else:
+                        # struct: recursively flatten
+                        nested_fields = self._get_struct_fields(member_type)
+                        if nested_fields:
+                            # add nested fields with adjusted offsets
+                            for nested_offset, nested_size in nested_fields:
+                                fields.append((offset + nested_offset, nested_size))
+                        else:
+                            # couldn't get nested fields, treat as single field
+                            fields.append((offset, size))
+                else:
+                    # couldn't get UDT details, treat as single field
+                    fields.append((offset, size))
+            else:
+                # primitive type, pointer, or non-UDT. add as-is
+                fields.append((offset, size))
+
         return fields
 
     def _is_float_type(self, tif: ida_typeinf.tinfo_t) -> bool:
@@ -43,7 +93,7 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
         return tif.is_floating()
 
     def validate_func(self, fti: ida_typeinf.func_type_data_t):
-        # return True to accept, or a string with error message to reject
+        # TODO: do something with this, returning True is fine for now
         return True
 
     def calc_retloc(self, fti: ida_typeinf.func_type_data_t) -> bool:
@@ -57,9 +107,27 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
 
         if fti.rettype.is_udt():
             fields = self._get_struct_fields(fti.rettype)
+            # filter out zero-sized fields (Nil type)
+            fields = [(offset, size) for offset, size in fields if size > 0]
+
+            # check for large gaps in scattered allocation (IDA can't handle these),
+            # and this only happens with UInt128 types which is pretty rare
+            has_large_gaps = False
+            if len(fields) > 1:
+                for i in range(len(fields) - 1):
+                    current_end = fields[i][0] + fields[i][1]
+                    next_start = fields[i + 1][0]
+                    gap_size = next_start - current_end
+                    if gap_size > 8:
+                        has_large_gaps = True
+                        break
 
             if len(fields) == 0:
                 warning(f"Could not get fields for return type {fti.rettype}, using rax")
+                fti.retloc.set_reg1(self._get_reg_id("rax"))
+            elif has_large_gaps:
+                # scattered allocations with large gaps cause decompiler errors
+                warning(f"Return type {fti.rettype} has gaps >8 bytes, using rax only to avoid odd crash")
                 fti.retloc.set_reg1(self._get_reg_id("rax"))
             elif len(fields) > 1 and len(fields) <= len(SRET_REGS):
                 # split struct return into separate registers
@@ -84,8 +152,8 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
             # simple type. largest builtin type is UInt128 so hopefully nothing bad comes from this
             ret_size = fti.rettype.get_size()
             if ret_size > 16:
-                warning(f"Non-UDT return type {fti.rettype} is {ret_size} bytes (>16), using rax")
-                fti.retloc.set_reg1(self._get_reg_id("rax"))
+                warning(f"Non-UDT return type {fti.rettype} is {ret_size} bytes (>16), using rax:rdx")
+                fti.retloc.set_reg2(self._get_reg_id("rax"), self._get_reg_id("rdx"))
             elif ret_size > 8:
                 # split across rax:rdx like __fastcall
                 fti.retloc.set_reg2(self._get_reg_id("rax"), self._get_reg_id("rdx"))
@@ -101,9 +169,8 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
         return True
 
     def calc_arglocs(self, fti: ida_typeinf.func_type_data_t) -> bool:
-        # log(f"[CrystalCC] calc_arglocs called with {fti.size()} args")
-        reg_idx = 0  # general-purpose register index
-        xmm_idx = 0  # floating-point register index
+        reg_idx = 0
+        xmm_idx = 0
         stk_off = 0
 
         for i in range(fti.size()):
@@ -125,13 +192,35 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
             if reg_idx >= len(ARG_REGS):
                 # allocate on stack
                 fa.argloc.set_stkoff(stk_off)
-                stk_off += (arg_size + 7) & ~7  # align to 8 bytes
+                stk_off += (arg_size + 7) & ~7 # align to 8 bytes
                 continue
 
             if fa.type.is_udt():
                 fields = self._get_struct_fields(fa.type)
+                # filter out zero-sized fields (Nil type)
+                fields = [(offset, size) for offset, size in fields if size > 0]
+
+                # check for large gaps in scattered allocation (IDA can't handle these)
+                # has_large_gaps = False
+                # if len(fields) > 1:
+                #     for j in range(len(fields) - 1):
+                #         current_end = fields[j][0] + fields[j][1]
+                #         next_start = fields[j + 1][0]
+                #         gap_size = next_start - current_end
+                #         if gap_size > 12:
+                #             has_large_gaps = True
+                #             break
+
                 regs_available = len(ARG_REGS) - reg_idx
 
+                # if has_large_gaps:
+                #     # scattered allocations with large gaps cause decompiler errors so use simple allocation
+                #     if reg_idx < len(ARG_REGS):
+                #         fa.argloc.set_reg1(self._get_reg_id(ARG_REGS[reg_idx]))
+                #         reg_idx += 1
+                #     else:
+                #         fa.argloc.set_stkoff(stk_off)
+                #         stk_off += (arg_size + 7) & ~7
                 if len(fields) > 1 and regs_available >= len(fields):
                     # all fields fit in registers
                     scattered = ida_typeinf.scattered_aloc_t()
@@ -147,7 +236,7 @@ class CrystalCC(ida_typeinf.custom_callcnv_t):
                     total_size = fa.type.get_size()
                     ida_typeinf.optimize_argloc(fa.argloc, total_size, None)
                 elif len(fields) > 1 and regs_available > 0:
-                    # struct spans registers and stack - split it
+                    # struct spans registers and stack so split it
                     scattered = ida_typeinf.scattered_aloc_t()
                     for idx, (offset, size) in enumerate(fields):
                         part = ida_typeinf.argpart_t()
