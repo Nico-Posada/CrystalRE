@@ -8,7 +8,7 @@
         "description": "Make reversing crystal binaries less annoying.",
         "license": "MIT",
         "categories": [
-            "API-scripting-and-automation",
+            "api-scripting-and-automation",
             "decompilation",
             "file-parsers-and-loaders"
         ],
