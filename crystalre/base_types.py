@@ -48,8 +48,6 @@ NO_POINTER_TYPES = (
 # Union(String | Nil) has the exact same runtime layout as String
 STRING_TYPES = {
     "String",
-    "Union(String | Nil)",
-    "(String | Nil)"
 }
 
 def _type_exists(name: str):
@@ -377,14 +375,14 @@ class BuiltinTypeHandler:
         if use_begin:
             begin_tif = name_to_tif(begin, False)
             if not begin_tif:
-                warning(f"Failed to get tif for {begin!r} when parsing Range")
-                return None
+                warning(f"Failed to get tif for {begin!r} when parsing Range.begin. Defaulting to Int32.")
+                begin_tif = "Int32"
 
         if use_end:
             end_tif = name_to_tif(end, False)
             if not end_tif:
-                warning(f"Failed to get tif for {end!r} when parsing Range")
-                return None
+                warning(f"Failed to get tif for {end!r} when parsing Range.end. Defaulting to Int32.")
+                end_tif = "Int32"
         
         fields = []
         if use_begin:
@@ -406,24 +404,32 @@ class BuiltinTypeHandler:
             }
         }
         """
-        
-        # epic edge case
-        if type_name == "String | Nil":
-            string_struct = """\
-            struct String
-            {
-                UInt32 type_id;
-                Int32 bytesize;
-                Int32 length;
-                UInt8 c[] __strlit(C,"UTF-8");
-            }
-            """
-
-            tif = ida_typeinf.tinfo_t(string_struct)
-            tif.set_named_type(None, "Union(String | Nil)")
-            return tif
 
         args = split_true_pipes(type_name)
+
+        # specialization: TYPE | Nil where TYPE is a pointer type becomes just TYPE*
+        if len(args) == 2 and "Nil" in args:
+            non_nil = next(a for a in args if a != "Nil")
+            tif = name_to_tif(non_nil, True)
+            if tif is not None:
+                if not tif.is_ptr():
+                    # set to none so we don't try to create the typedef
+                    tif = None
+            else:
+                # couldn't resolve the type, assume it's a _UNKNOWN*
+                tif = ida_typeinf.tinfo_t().get_stock(ida_typeinf.STI_PUNKNOWN)
+            
+            if tif is not None:
+                typedef_name = f"Union({type_name})"
+                # save the pointer type definition into the til
+                if tif.set_named_type(None, typedef_name, ida_typeinf.NTF_COPY) == ida_typeinf.TERR_OK:
+                    # return a typeref pointing at the saved type
+                    tif.create_typedef(None, typedef_name)
+                    return tif
+                else:
+                    warning(f"Failed to create typedef for Union({type_name})")
+                    return None
+
         union_fields = []
         for arg in args:
             if arg == "Nil": continue
