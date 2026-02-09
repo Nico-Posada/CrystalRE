@@ -4,6 +4,7 @@ import ida_kernwin
 import idaapi
 from dataclasses import dataclass
 from typing import Optional
+import re
 
 try:
     from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
@@ -270,9 +271,16 @@ class SetTypeAction(idaapi.action_handler_t):
             "Please use the Pointer(...) wrapper for internal pointers.\n"
             "Example: Array(Pointer(UInt8)) instead of Array(UInt8*)"
         )
+    
+    def _normalize_seps(self, crystal_type: str):
+        crystal_type = re.sub(r"\s*\|\s*", " | ", crystal_type) # fix pipes between union types
+        crystal_type = re.sub(r"\s*,\s*", ", ", crystal_type) # fix commas betweeen args
+        return crystal_type
 
     # parse a crystal type string into a tinfo_t, handling trailing pointers
     def _parse_type_string(self, crystal_type: str):
+        crystal_type = self._normalize_seps(crystal_type)
+        
         # strip the pointer asterisks first, we'll reapply later
         num_ptrs = 0
         stripped_type = crystal_type
