@@ -60,12 +60,12 @@ struct Slice(T) {
 Since this struct is <= 32 bytes in size it'll get passed by value. Notice how `size` and `read_only` fit in 8 bytes, so one might think that they can be passed together in a single register (IDA assumes this too!), but that is not the case. Instead, the compiler essentially turns the function into this
 
 ```crystal
-# NOTE: the symbol still shows Slice(T), this is just to showcase how each member gets split up
-def do_thing(a : Int32, b.size : Int32, b.read_only : Bool, b.pointer : Pointer(T))
+# NOTE: the symbol still shows Slice(Int32), this is just to showcase how each member gets split up
+def do_thing(a : Int32, b.size : Int32, b.read_only : Bool, b.pointer : Pointer(Int32))
 end
 ```
 
-So if you set the Slice(UInt8) type as the second arg in IDA, it assumes that `size` and `read_only` get passed in the same register which breaks decompilation outputs. One way to circumvent this is by using __usercall and manually specifying the registers used in the slice param, but that's a lot of manual work and the function prototype ends up looking super ugly.
+So if you set the Slice(Int32) type as the second arg in IDA, it assumes that `size` and `read_only` get passed in the same register which breaks decompilation outputs. One way to circumvent this is by using __usercall and manually specifying the registers used in the slice param, but that's a lot of manual work and the function prototype ends up looking super ugly.
 
 The solution? Creating a custom calling convention. When you set the `__crystal` calling convention on a function, it'll emulate how __fastcall works, but if it ever encounters a user defined type (udt), it'll extract all the members and let them have their own registers/stack space.
 
@@ -182,13 +182,12 @@ The plugin stores its state in the IDA database, so it won't re-run on subsequen
 ## Known Issues
 
 - If a binary has dwarf symbols and you load it with default options, every unhandled function will be of type `int __cdecl ()` and it ruins decompilations. This is an issue with crystal itself and not the plugin. The only way to fix this is to uncheck `Apply calling conventions` and `Function prototypes are definitive` when the _DWARF info_ pop-up appears.
-- If a `Proc` contains a closure, the crytsal codegen will inject the closure as the first arg. There's no way of knowing if this closure parameter has been injected from the symbol name alone, so we just assume all procs don't have closures. If you're analyzing a proc and the decomp look messed up, it's probably because the closure is the real first arg.
+- If a `Proc` contains a closure, the crystal codegen will inject the closure as the first arg. There's no way of knowing if this closure parameter has been injected from the symbol name alone, so we just assume all procs don't have closures. If you're analyzing a proc and the decomp look messed up, it's probably because the closure is the real first arg.
 - If a function has a struct return and that struct is greater than 32 bytes in size, a return pointer gets inserted as the first parameter into the function. This parameter doesn't appear in the function symbol, so it's very hard to detect if it's inserted or not. To avoid false positives, it is never checked for, so make sure to be weary for those.
 
 ## Limitations
 
 - Works best if symbols are included (there's no strip option when building, so most binaries include symbols)
-- Type inference limited to types in the IDA database
 - Optimized for x86-64 Linux binaries (32-bit binaries likely wont work well)
 
 ## Credits
