@@ -6,6 +6,7 @@ import ida_ida
 
 from .log import log, warning
 from .symbols import split_true_commas, split_true_pipes
+from .cr_enums import is_std_cr_enum, define_enum
 from typing import Callable, Optional
 
 # All normal types
@@ -45,11 +46,6 @@ NO_POINTER_TYPES = (
     "Hash::Entry"
 )
 
-# Union(String | Nil) has the exact same runtime layout as String
-STRING_TYPES = {
-    "String",
-}
-
 def _type_exists(name: str):
     return ida_typeinf.tinfo_t().get_named_type(None, name)
 
@@ -57,7 +53,7 @@ def is_numeric_type(type_name: str):
     return type_name in CR_BASE_TYPES and type_name not in ("String", "Void")
 
 def should_type_be_ptr(type_name: str):
-    return type_name in STRING_TYPES or (type_name not in CR_BASE_TYPES and all(not type_name.startswith(s) for s in NO_POINTER_TYPES))
+    return type_name == "String" or (type_name not in CR_BASE_TYPES and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)) 
     # return (type_name == "String" or type_name not in CR_BASE_TYPES) # and all(not type_name.startswith(s) for s in NO_POINTER_TYPES)
 
 def _get_expected_tif(ida_type_name: str):
@@ -138,9 +134,13 @@ class BuiltinTypeHandler:
         
         tif = ida_typeinf.tinfo_t()
         if tif.get_named_type(None, type_name):
-            if assume_ptrs and should_type_be_ptr(type_name):
+            if assume_ptrs and should_type_be_ptr(type_name) and not tif.is_enum():
                 tif.create_ptr(tif)
             return tif
+        
+        # it could be an enum???
+        if is_std_cr_enum(type_name):
+            return define_enum(type_name)
         
         for (lhs, rhs), handler in _TYPE_HANDLERS:
             if type_name.startswith(lhs) and type_name.endswith(rhs):
@@ -513,3 +513,4 @@ def apply_crystal_base_types():
 
     tif = ida_typeinf.tinfo_t(string_struct)
     tif.set_named_type(None, "String")
+

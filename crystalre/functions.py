@@ -138,7 +138,7 @@ def set_function_types():
             elif should_add_self and i == 0:
                 funcarg.name = "self"
                 # self args must be ptrs if they're large structs
-                if not arg_tif.is_ptr() and not is_numeric_type(data.get("self_type", "")):
+                if not arg_tif.is_ptr() and not is_numeric_type(data.get("self_type", "")) and not arg_tif.is_enum():
                     arg_tif.create_ptr(arg_tif)
 
             funcarg.type = arg_tif

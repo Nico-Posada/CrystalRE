@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 import json
 import ida_name
 import ida_typeinf
@@ -9,7 +9,7 @@ from .log import log, warning
 
 def get_functions():
     # get path to cr_funcs.json relative to this file
-    data_path = os.path.join(os.path.dirname(__file__), "data", "cr_funcs.json")
+    data_path = Path(__file__).parent / "data" / "cr_funcs.json"
 
     try:
         with open(data_path, "r") as f:
