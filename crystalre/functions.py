@@ -39,7 +39,7 @@ def set_function_names():
 
             elif parsed_sym.symbol_type == SymbolType.PROC:
                 proc_info = parsed_sym.symbol_data
-                final_name += f"~{proc_info['symbol_string']}"
+                final_name = f"~{proc_info['symbol_string']}"
 
                 # this part isn't standard but whatever
                 if proc_info['proc_num']:
@@ -48,7 +48,7 @@ def set_function_names():
             elif parsed_sym.symbol_type in (SymbolType.MATCH, SymbolType.OTHER):
                 func_name = parsed_sym.orig_name
                 # the function name is already fine so we can use the original name
-                final_name += func_name 
+                final_name = func_name 
 
             # set the name in IDA
             ida_name.set_name(rva, final_name, ida_name.SN_NOWARN | ida_name.SN_NOCHECK | ida_name.SN_FORCE)

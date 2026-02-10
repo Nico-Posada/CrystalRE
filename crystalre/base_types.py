@@ -439,6 +439,13 @@ class BuiltinTypeHandler:
                 union_fields.append((clean_name, tif))
         
         udt = _udt_from_fields(union_fields, is_union=True)
+
+        # if all union members are smaller than 8 bytes, force 8 byte alignment
+        max_size = max((tif.get_size() for _, tif in union_fields), default=0)
+        if 0 < max_size < 8:
+            # shift amount + 1, so 2^3 = 8 byte alignment
+            udt.sda = 4
+
         union_tif = ida_typeinf.tinfo_t()
         if not union_tif.create_udt(udt, ida_typeinf.BTF_UNION):
             warning(f"Failed to create union for ({type_name!s})")
@@ -452,7 +459,29 @@ class BuiltinTypeHandler:
         
         udt = _udt_from_fields(fields)
         return _udt_to_named_tif(udt, f"Union({type_name})", False)
+
+    @_register_handler("Tuple(...)")
+    def handle_tuple(type_name: str, assume_ptrs: bool):
+        """
+        struct Tuple(X1, X2, ...) {
+            X1 _0_;
+            X2 _1_;
+            ...
+        }
+        """
+        tuple_args = split_true_commas(type_name)
+        tuple_fields = []
+        for i, arg in enumerate(tuple_args):
+            tif = name_to_tif(arg, True)
+            if tif is None:
+                # Tuple requires all tifs to be valid :(
+                return None
+
+            name = f"_{i}_" # it's technically [i] but that probs wouldnt look nice in the name
+            tuple_fields.append((name, tif))
         
+        udt = _udt_from_fields(tuple_fields)
+        return _udt_to_named_tif(udt, f"Tuple({type_name})", False)
     
     @_register_handler("....class")
     def handle_class(type_name: str, assume_ptrs: bool):
@@ -495,10 +524,7 @@ def apply_crystal_base_types():
         flags = ida_typeinf.NTF_REPLACE if type_exists else 0
         tif.set_named_type(None, cr_name, flags)
     
-    # Delete any form of the String struct that may exist
-    ida_typeinf.del_named_type(None, "String", ida_typeinf.NTF_TYPE)
-
-    # create String struct.
+    # create String struct, replacing any existing definition
     # `__strlit(C,"UTF-8")` makes it so defining global strings
     # shows the `c` var as a string rather than an array
     string_struct = """\
@@ -512,5 +538,5 @@ def apply_crystal_base_types():
     """
 
     tif = ida_typeinf.tinfo_t(string_struct)
-    tif.set_named_type(None, "String")
+    tif.set_named_type(None, "String", ida_typeinf.NTF_REPLACE)
 

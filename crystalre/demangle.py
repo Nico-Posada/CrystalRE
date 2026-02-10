@@ -11,11 +11,13 @@ class NamingHook(ida_idp.IDP_Hooks):
         if name and name.startswith("*"):
             # log(f"Got {name}, {disable_mask}, {demreq}")
             return [1, name[1:], 1]
+        elif name and name.startswith("~"):
+            return [1, name, 1]
         return 0
 
 def set_valid_chars():
     # make some crystal-specific characters valid in names
-    special_chars = "~, !@#%^&*()-=<>/+|"
+    special_chars = "~, !@#%^&*()-=<>/+|$"
     for char in special_chars:
         ida_name.set_cp_validity(ida_name.UCDR_MANGLED, ord(char))
         ida_name.set_cp_validity(ida_name.UCDR_TYPE, ord(char))
