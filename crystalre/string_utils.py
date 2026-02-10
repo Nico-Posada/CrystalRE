@@ -6,6 +6,7 @@ import ida_hexrays
 import ida_typeinf
 import ida_idaapi
 import idc
+import re
 
 from .log import log, info, warning, error
 from .base_types import _type_exists
@@ -25,7 +26,7 @@ def get_string_at(addr: int) -> bytes:
         str_data = ida_bytes.get_bytes(addr + 12, bytesize)
         try:
             decoded = str_data.decode('utf-8')
-            if any([c < " " and c not in "\r\n\t" for c in decoded]):
+            if any([c < " " and c not in "\r\n\t\f\v\x1b" for c in decoded]):
                 # Nope.
                 return None
             
@@ -94,7 +95,7 @@ def find_and_define_strings():
             # move to next 8-byte aligned position
             addr += 8
 
-    log(f"Found {count} String objects in .rodata")
+    # log(f"Found {count} String objects in .rodata")
     return count
 
 
@@ -147,11 +148,40 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
                             key = (loc.ea, loc.itp)
                             if key not in self.comments:
                                 self.comments[key] = []
-                            self.comments[key].append(f'"{decoded}"')
+                            self.comments[key].append(decoded)
                         except (UnicodeDecodeError, AttributeError):
                             pass
 
         return 0
+    
+    @staticmethod
+    def _get_str_repr(string: str):
+        mapping = {
+            "\"": r"\"",
+            "\\": r"\\",
+            "\f": r"\f",
+            "\r": r"\r",
+            "\t": r"\t",
+            "\v": r"\v",
+            "\x1b": r"\e",
+            # keep a real \n in the decode to make the reprs nicer
+            "\n": r"\n" + "\n",
+        }
+        
+        def fix_chained_nl(m: re.Match[str]):
+            # For when strings have multiple newlines so it gets repr'd as "str\n\n\n" + ...
+            # instead of "str\n" + "\n" + "\n" + ...
+            return m.group(0).replace("\n", "") + "\n"
+        
+        parts = re.sub(
+            r"(?:\\n\n){2,}",
+            fix_chained_nl,
+            "".join(mapping.get(c, c) for c in string),
+            re.MULTILINE
+        ).rstrip("\n").split("\n")
+
+        result = " +\n".join(map(lambda s: f'"{s}"', parts))
+        return result
 
     def apply_comments(self):
         """apply all collected comments"""
@@ -160,7 +190,7 @@ class StringRefVisitor(ida_hexrays.ctree_visitor_t):
             loc.ea = ea
             loc.itp = itp
             # combine multiple comments with separator
-            combined = ", ".join(comment_list)
+            combined = ", ".join(map(self._get_str_repr, comment_list))
             self.cfunc.set_user_cmt(loc, combined)
 
 

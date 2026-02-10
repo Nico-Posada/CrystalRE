@@ -34,8 +34,8 @@ def define_enum(name: str) -> Optional[ida_typeinf.tinfo_t]:
     signed = size_str[0] == "i"
     bits = int(size_str[1:])
 
-    # ida requires globally unique enum member names, prefix to avoid collisions
-    prefix = name.replace("::", "_") + "_"
+    # ida requires globally unique enum member names, prefix with base name to avoid collisions (C moment </3)
+    prefix = name.split("::")[-1] + "_"
 
     etd = ida_typeinf.enum_type_data_t()
     for member_name, member_value in members:
